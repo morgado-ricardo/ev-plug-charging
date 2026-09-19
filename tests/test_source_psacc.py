@@ -194,7 +194,7 @@ def test_unknown_source_type_raises():
 
 
 def test_psacc_supports_refresh():
-    """D5's rescue wakeup only exists for sources that can actually ask."""
+    """The rescue wakeup only exists for sources that can actually ask."""
     assert PsaccSource.supports_refresh is True
 
 

@@ -1,4 +1,4 @@
-"""projected_soc(): max(reading_proj, session_proj), D1-D3."""
+"""projected_soc(): max(reading_proj, session_proj) -- never one alone."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -17,8 +17,9 @@ def test_not_charging_returns_current_reading():
 
 
 def test_untrustworthy_soc_returns_none():
-    """D8: a missing/untrustworthy SoC must not silently become a number
-    a caller could compare against target (see R6)."""
+    """A missing or untrustworthy SoC must not silently become a number a
+    caller could compare against target -- that is the false completion
+    R6 exists to prevent."""
     assert projected_soc(T0, None, False, True, T0, T0, SessionAnchor(), RATE) is None
     assert projected_soc(T0, 55.0, False, True, T0, T0, SessionAnchor(), RATE) is None
 
@@ -36,9 +37,9 @@ def test_reading_projection_extrapolates_from_last_reading():
 
 
 def test_session_cap_wins_when_reading_understates():
-    """D2: 'the session cap must not be argued down by a reading
-    projection that is still optimistic [i.e. too low]'. Construct the
-    case directly: a fresh-but-low reading arrives after a long charge, so
+    """The session cap must not be argued down by a reading projection
+    that is still optimistic (i.e. too low). Construct the case
+    directly: a fresh-but-low reading arrives after a long charge, so
     the reading term barely extrapolates, while the session term -- which
     has been counting from the start SoC the whole time -- is already much
     higher. max() must pick the session term, not the reading term."""

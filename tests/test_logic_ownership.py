@@ -72,7 +72,7 @@ def test_manual_off_expires_after_window_close():
 
 
 def test_restore_with_unknown_owner_outside_window_fails_closed():
-    """R1/D8: a restart loses in-memory ownership. If the plug is ON, we
+    """R1: a restart loses in-memory ownership. If the plug is ON, we
     are OUTSIDE the window, and ownership restored as UNKNOWN, this must
     NOT read as "leave it running forever" -- that is the R1 failure
     (unbounded charge) reached by a different road. Since a restart

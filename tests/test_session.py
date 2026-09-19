@@ -1,5 +1,5 @@
-"""advance_session(): new-session detection, anchor capture, anchor
-correction (D3, D4, D9, R8, R11)."""
+"""advance_session(): new-session detection, anchor capture, and the
+one-time anchor correction. R8 and R11 both hinge on this file."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -30,8 +30,9 @@ def test_charging_active_edge_captures_matched_pair_anchor():
 
 
 def test_anchor_provisional_when_reading_is_stale_at_capture():
-    """D4/D3 case 2: plug energised hours before the cable goes in -- the
-    reading at the instant charging_active fires may be old."""
+    """Plug energised hours before the cable goes in -- the reading at
+    the instant charging_active fires may already be old, so the anchor
+    is captured provisionally and corrected later."""
     state = SessionState()
     inp = base_inputs().set(
         now=dt(0, 30),
@@ -51,8 +52,9 @@ def test_anchor_provisional_when_reading_is_stale_at_capture():
 
 
 def test_anchor_correction_moves_value_not_clock():
-    """D4: the correction must reproduce the fresh reading NOW without
-    moving charge_started_at."""
+    """The correction must reproduce the fresh reading NOW without moving
+    charge_started_at -- the value shifts, the clock does not, so the
+    session cap still bounds the same real duration."""
     charge_started = dt(22, 0)
     state = SessionState(
         charge_started_at=charge_started,
