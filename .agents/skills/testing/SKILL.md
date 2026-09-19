@@ -60,12 +60,34 @@ python -m venv .venv
 source .venv/bin/activate
 pip install tzdata   # PyRIC's build also needs this present
 SETUPTOOLS_USE_DISTUTILS=stdlib pip install -r requirements-test.txt
+pip uninstall -y aiodns pycares   # see below
 ```
 
 Use an isolated venv rather than the system Python — resolving `ruff` or
 `pytest` from the wrong environment has already produced a false "clean"
 report in this project once (a different `ruff` binary silently missed an
-unused import).
+unused import; see also `.github/workflows/test.yml`'s pinned `ruff==` for
+why CI doesn't resolve "whatever's latest" either).
+
+**`aiodns`/`pycares` must not be present when tier 2 runs.**
+`homeassistant` hard-depends on `aiodns` -> `pycares` (a c-ares DNS
+binding). Its mere presence flips `aiohttp`'s `DefaultResolver` to
+`AsyncResolver`, which spawns a background reactor thread
+(`_run_safe_shutdown_loop`) the first time a `ClientSession` is created --
+e.g. via `async_get_clientsession()` in `sources/psacc.py`. That thread
+doesn't reliably finish unwinding before
+`pytest-homeassistant-custom-component`'s autouse `verify_cleanup` fixture
+checks for leaked threads after every test, which fails the test with an
+unrelated teardown `AssertionError` even though the test body itself
+passed -- this is timing-dependent, so it can pass locally and still flake
+in CI (or on one Python version and not another; it's what
+`.github/workflows/test.yml`'s CI matrix hit on 3.12 while 3.13 happened to
+get lucky). Tests never need real DNS resolution -- everything is mocked --
+so `pip uninstall -y aiodns pycares` after installing requirements removes
+the thread entirely; `aiohttp` falls back to its plain `ThreadedResolver`,
+which leaves nothing behind. `.github/workflows/test.yml` does this as a
+step, not requirements-test.txt, because there's no clean way to exclude a
+transitive dependency from a plain `pip install -r` line.
 
 ## The purity test
 

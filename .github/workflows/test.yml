@@ -20,6 +20,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
+          # homeassistant hard-depends on aiodns -> pycares (a c-ares DNS
+          # binding). Its mere presence makes aiohttp's DefaultResolver an
+          # AsyncResolver, which spawns a pycares reactor thread
+          # ("_run_safe_shutdown_loop") the first time a ClientSession is
+          # created -- e.g. via async_get_clientsession() in our own
+          # sources/psacc.py. That thread doesn't always finish unwinding
+          # by the time pytest-homeassistant-custom-component's autouse
+          # verify_cleanup fixture checks for leaked threads after each
+          # test, which fails the test with an unrelated teardown error
+          # even though the test body itself passed. Tests never need real
+          # DNS resolution (everything is mocked), so dropping aiodns/
+          # pycares here removes the thread entirely -- aiohttp falls back
+          # to its plain ThreadedResolver, which leaves nothing behind.
+          pip uninstall -y aiodns pycares
       - name: Ruff
         run: ruff check custom_components/
       - name: Pytest

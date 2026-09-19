@@ -1,6 +1,14 @@
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
-pytest-homeassistant-custom-component>=0.13.0
+# Pinned as a pair, not independently: pytest-homeassistant-custom-component
+# tracks homeassistant releases closely, and an unpinned >= on both let CI
+# resolve two uncoordinated versions per Python interpreter (whichever was
+# newest-compatible with that interpreter) -- one pair's fixtures required
+# aiodns present, the other's teardown check broke BECAUSE aiodns was
+# present. This pair is verified clean (158 passed, 0 errors) on both
+# Python 3.12 and 3.13 with aiodns/pycares removed -- see
+# .github/workflows/test.yml and .agents/skills/testing/SKILL.md.
+pytest-homeassistant-custom-component==0.13.205
+homeassistant==2025.1.4
 ruff==0.15.8
-homeassistant>=2024.3.0
 PyYAML>=6.0
