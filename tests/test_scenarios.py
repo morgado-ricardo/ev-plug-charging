@@ -1,7 +1,8 @@
-"""R1-R14: the regression scenarios from docs/ev-charging-requirements.md
-section 7, all real observed nights. This suite is the port's acceptance
-gate (port plan section 12/14) -- it is not done until every one of these
-passes.
+"""R1-R14: fourteen regression scenarios, each one a real observed night
+where something went wrong. This suite is the acceptance gate for any
+change to logic.py, session.py or rate_model.py -- a change is not done
+until every one of these passes, and a scenario is never edited to make a
+change pass.
 
 Each test drives logic.reduce() over a synthetic clock, ticking roughly the
 way the coordinator will: PSACC polls at ~2 min intervals, plus a ~30s

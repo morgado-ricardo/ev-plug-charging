@@ -1,12 +1,9 @@
 """rate_model.py: the one-directional guarantee is the point of this file.
 
-test_effective_rate_never_below_seed is the direct regression test for the
-defect the design review caught in the first draft of this port: capping
-only the session-cap term at max(learned, seed) while letting the READING
-term use a fast-biased learned rate on its own let the charge stop up to 26
-percentage points short on the R1 blackout scenario. See the port plan
-section 5 for the full derivation and the table of measured stop-shortfall
-by clamp floor.
+test_effective_rate_never_below_seed is the direct regression test for a
+real defect: capping only the session-cap term at max(learned, seed) while
+letting the READING term use a fast-biased learned rate on its own let the
+charge stop up to 26 percentage points short on the R1 blackout scenario.
 """
 from __future__ import annotations
 
@@ -33,10 +30,10 @@ from ev_plug_charging.models import RateSnapshot
 SEED = seed_rate(capacity_kwh=50.8, power_kw=1.84, efficiency=0.82)
 
 
-def test_seed_matches_yaml_default():
-    # packages/ev_charging.yaml:484-495's hard-coded constants, at the
-    # default efficiency, should reproduce the YAML's own float(20.2)
-    # fallback closely.
+def test_seed_is_about_twenty_minutes_per_percent():
+    # A 50.8 kWh pack on a 1.84 kW granny cable at 0.82 efficiency: the
+    # arithmetic should land near 20 min/%. A seed far from this means the
+    # formula changed, and every projection moves with it.
     assert 20.0 <= SEED <= 20.5
 
 

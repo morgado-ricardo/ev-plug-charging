@@ -63,9 +63,8 @@ Adding, renaming, or reinterpreting a config key means bumping
 `__init__.py` — not quietly reading the new key with `.get(KEY, default)`
 and hoping old entries happen to work. A `.get()` default papers over the
 gap for new installs but leaves existing installs in an unmigrated,
-undocumented state. `__init__.py`'s existing migration handling the old
-`charge_efficiency`/`soc_step_minutes` numeric constants (ported from
-`packages/ev_charging.yaml:1097-1165`) is the template to follow.
+undocumented state. `__init__.py`'s existing migration arms are the
+template to follow.
 
 ## Timezone discipline
 

@@ -5,8 +5,9 @@ config_flow, entity platforms) actually wires together, as opposed to the
 pure-logic suite's proof that the DECISIONS are correct.
 
 Requires pytest-homeassistant-custom-component; skipped automatically if
-it is not installed (it pulls in a large, sometimes hard-to-build
-dependency tree -- see EXTRACTING.md/README.md for how to install it).
+it is not installed, since it pulls in a large and sometimes
+hard-to-build dependency tree. `pip install -r requirements-test.txt`
+gets it -- see README.md's Development section.
 """
 from __future__ import annotations
 

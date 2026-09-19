@@ -1,5 +1,6 @@
-"""refresh_source (manual equivalent of rest_command.opel_wakeup) and
-reset_rate_learning (plan section 5 -- for a capacity/vehicle change)."""
+"""refresh_source -- the manual equivalent of the automatic rescue wakeup,
+and reset_rate_learning -- clears the learned-rate samples after a
+capacity or vehicle change makes them wrong."""
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity

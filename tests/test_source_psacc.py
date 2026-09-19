@@ -43,8 +43,7 @@ def test_parses_soc_status_and_plugged():
 def test_car_charge_finished_is_a_separate_terminal_signal():
     """NOT the logical opposite of car_charging -- a provider can report a
     third status (Disconnected, Error, ...) that is neither "in progress"
-    nor "finished". Ported from opel_charge_complete's InProgress->Finished
-    edge (packages/opel.yaml:913-950)."""
+    nor "finished"."""
     finished = parse_vehicle_info(
         _payload(status="Finished"), T0, None, "InProgress", "Finished"
     )
@@ -93,8 +92,10 @@ def test_missing_energy_block_is_no_reading_not_an_error():
 
 
 def test_battery_voltage_field_is_parsed_as_a_percentage():
-    """packages/opel.yaml:370-385's finding, load-bearing: PSA's
-    battery.voltage is the 12V's own state of charge as a percentage."""
+    """Load-bearing: PSA's `battery.voltage` is NOT a voltage. It is the
+    12V battery's own state of charge, as a percentage. Reading it as
+    volts (or scaling it to look like volts) makes every 12V health
+    figure meaningless."""
     snap = parse_vehicle_info(_payload(aux_battery_soc=62.0), T0, prev=None)
     assert snap.aux_battery_soc == 62.0
 
@@ -156,7 +157,8 @@ def test_vehicle_info_url_always_requests_the_cache():
 
 def test_never_sends_always_check():
     """always_check=true makes PSACC run its own enforcement loop and wake
-    the car every ~5 min (packages/opel.yaml:245-251)."""
+    the car every ~5 min -- exactly the 12V drain this integration
+    exists to avoid."""
     assert "always_check" not in _source()._vehicle_info_url()
 
 
@@ -210,14 +212,13 @@ def test_psacc_supports_aux_battery():
 
 
 def test_psacc_supports_every_command_in_the_vocabulary():
-    """PSACC is the one source that implements all nine -- see
-    packages/opel.yaml:9-46, the rest_command: block this replaces."""
+    """PSACC is the one source that implements all nine."""
     assert PsaccSource.supported_commands == VEHICLE_COMMANDS
 
 
-def test_vehicle_command_paths_match_the_yaml_rest_commands_verbatim():
-    """Every path here is ported byte-for-byte from
-    packages/opel.yaml:9-46's rest_command: URLs (VIN substituted)."""
+def test_vehicle_command_paths_are_the_real_psacc_endpoints():
+    """Pins the command->URL mapping. A typo here fails silently at
+    runtime: PSACC answers 404 and the command simply never happens."""
     vin = "VF1TEST"
     assert _vehicle_command_path("wake", vin, None) == f"/wakeup/{vin}"
     assert _vehicle_command_path("lock", vin, None) == f"/lock_door/{vin}/1"

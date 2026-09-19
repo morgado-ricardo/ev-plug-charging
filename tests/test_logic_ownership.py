@@ -1,9 +1,10 @@
-"""Plug ownership (plan section 3.3): who turned the plug on, and what
-that implies for the level-based re-assert. This is the one place the
-port is behaviourally DIFFERENT from the YAML by construction (a
-level-based decision re-asserts every tick; the YAML's edge-triggered
-automations only acted on their triggers) -- these tests pin the
-mitigation down.
+"""Plug ownership: who turned the plug on, and what that implies for the
+level-based re-assert.
+
+A level-based decision re-asserts on every tick, so "the plug is off but
+should be on" is a conclusion it reaches over and over. Without ownership
+it would fight a human who just turned the plug off by hand. These tests
+pin that down.
 """
 from __future__ import annotations
 

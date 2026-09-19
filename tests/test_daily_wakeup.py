@@ -1,9 +1,10 @@
 """The daily wakeup: a restart-safe scheduled-time crossing
 (logic._daily_wakeup_due) plus the three budget gates reduce() applies
 before actually spending it (session active, already fresh, source
-unreachable). Ported from opel_daily_wakeup
-(packages/opel.yaml:884-898), but budget-aware where the YAML was not --
-see AGENTS.md's core-objective section on why that matters.
+unreachable).
+
+Being due is not enough to spend it: a wakeup that buys nothing still
+costs 12V charge, which is the premise the whole integration rests on.
 """
 from __future__ import annotations
 

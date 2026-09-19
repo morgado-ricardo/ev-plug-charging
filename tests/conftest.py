@@ -22,7 +22,7 @@ from ev_plug_charging.models import (
     RateSnapshot,
 )
 
-DEFAULT_SEED_RATE = 20.2  # matches packages/ev_charging.yaml's float(20.2) default
+DEFAULT_SEED_RATE = 20.2  # ~50 kWh on a 1.84 kW granny cable
 DAY = date(2026, 9, 12)
 
 

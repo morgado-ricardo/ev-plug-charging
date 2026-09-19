@@ -11,11 +11,10 @@ this was built against):
 - vehicle info: ALWAYS requests ?from_cache=1. This is load-bearing.
   Without it PSACC treats the request as a live poll and may wake the
   vehicle over its cellular link to refresh the cache -- exactly the
-  12V-draining behaviour this integration exists to avoid (see
-  docs/ev-charging-requirements.md section 1.2). Reading and refreshing
-  being *separate acts* is the thing PSACC is unusually good at; most
-  vehicle APIs conflate them.
-- wakeup: the one deliberate exception (D5), a real remote wakeup, spent at
+  12V-draining behaviour this integration exists to avoid. Reading and
+  refreshing being *separate acts* is the thing PSACC is unusually good
+  at; most vehicle APIs conflate them.
+- wakeup: the one deliberate exception, a real remote wakeup, spent at
   most once per session and only when the coordinator's three gates all
   pass.
 """
@@ -67,17 +66,15 @@ REQUEST_TIMEOUT_SECONDS = 30
 # on the snapshot reports which path is live.
 _PAYLOAD_TIMESTAMP_KEYS = ("updated_at", "timestamp", "last_update")
 
-# Every path below is a real PSACC endpoint, ported verbatim from
-# packages/opel.yaml's `rest_command:` block (lines 9-46) -- this is the
-# refactor EXTRACTING.md/MIGRATION.md point at: once this repository is a
-# standalone HACS install, that whole rest_command: block can be deleted
-# and opel.yaml can call ev_plug_charging.vehicle_command instead, because
-# the transport (host, VIN, timeout, error handling) already lives here.
+# Every path below is a real PSACC endpoint. They are exposed through the
+# vehicle_command service rather than as entities: the transport (host,
+# VIN, timeout, error handling) already lives here, so declaring it a
+# second time somewhere else means owning it twice.
 #
-# charge_now/1 forces an immediate charge, overriding PSACC's own deferred
-# schedule; charge_now/0 does NOT stop charging outright, it reverts to
-# that schedule, which may still be mid-charge if its own time has passed
-# (packages/opel.yaml:20-23's own note, still true here).
+# Note charge_now/1 forces an immediate charge, overriding PSACC's own
+# deferred schedule; charge_now/0 does NOT stop charging outright, it
+# reverts to that schedule, which may still be mid-charge if its own time
+# has passed.
 def _vehicle_command_path(command: str, vin: str, params: Optional[dict[str, Any]]) -> str:
     """Pure: (command, vin, params) -> the URL path to call. Split out from
     async_vehicle_command so the mapping is unit-testable without a

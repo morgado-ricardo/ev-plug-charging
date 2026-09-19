@@ -9,11 +9,13 @@ coordinator tick -- session bookkeeping, ownership, debounce timers,
 one-shot latches. `Inputs` is a snapshot of the world right now. `Decision`
 says what to do with the plug and what happened.
 
-Every behaviour ported from packages/ev_charging.yaml is implemented here as
-arithmetic over timestamps, never as an edge-triggered callback -- see
-docs/ev-charging-requirements.md sections 3-4 (FR-*, D1-D10) for the
-requirements this reproduces, and section 7 (R1-R14) for the regression
-scenarios tests/test_scenarios.py checks this module against.
+Everything here is arithmetic over timestamps, never an edge-triggered
+callback. Edge triggers lose their state across a restart; timestamps do
+not, and this module has to keep projecting correctly through both a
+restart and hours of telemetry silence.
+
+tests/test_scenarios.py (R1-R14) is the acceptance gate for this module.
+Each scenario is a real failure that happened once.
 """
 from __future__ import annotations
 
@@ -84,9 +86,8 @@ def in_window(
     `open_edge`/`close_edge` are passed explicitly by the coordinator's exact
     point-in-time callbacks rather than re-derived, because a callback can
     land a moment early or late and a recomputation would then disagree with
-    the clock that is supposed to be authoritative at that instant -- the
-    same race D10 describes for the old `now()`-based template sensor. See
-    plan section 6 / R12.
+    the clock that is supposed to be authoritative at that instant. R12 is
+    the regression test.
     """
     if open_edge:
         return True
@@ -103,7 +104,7 @@ def in_window(
 def window_instance_id(now: datetime, start: time, end: time) -> str:
     """A stable identifier for "which window occurrence is this". Used only
     to deduplicate the once-per-window "charge not started" push across
-    restarts (plan section 3.2), not for timing."""
+    restarts, not for timing."""
     today = now.date()
     if start > end and now.time() < end:
         open_date = today - timedelta(days=1)
@@ -113,8 +114,8 @@ def window_instance_id(now: datetime, start: time, end: time) -> str:
 
 
 def is_trustworthy_soc(soc: Optional[float], source_reachable: bool) -> bool:
-    """FR-S4: a valid-looking number from a dead source is as dangerous as
-    no number at all."""
+    """A valid-looking number from a dead source is as dangerous as no
+    number at all."""
     return soc is not None and source_reachable
 
 
@@ -123,11 +124,15 @@ def silence_minutes(
     soc_changed_at: Optional[datetime],
     charge_started_at: Optional[datetime],
 ) -> float:
-    """FR-H2: measured from the LATER of the last reading and the actual
-    charge start -- never from the raw age of the reading, and never from
-    plug-on. See D3 for why both of those are wrong."""
+    """Measured from the LATER of the last reading and the actual charge
+    start.
+
+    Never from the raw age of the reading: a car parked for three days has
+    a three-day-old reading and nothing is wrong with it. Never from
+    plug-on either: a cable can sit connected for an hour before current
+    flows. Only silence DURING a charge means the feed has gone quiet."""
     if soc_changed_at is None:
-        return 0.0  # fail-closed: "not stale" (D8)
+        return 0.0  # fail closed: "not stale"
     anchor = soc_changed_at
     if charge_started_at is not None and charge_started_at > anchor:
         anchor = charge_started_at
@@ -144,11 +149,12 @@ def projected_soc(
     anchor: SessionAnchor,
     rate: RateSnapshot,
 ) -> Optional[float]:
-    """sensor.ev_projected_soc (packages/ev_charging.yaml:639-676).
+    """The projection that gates the stop.
 
-    max(reading_proj, session_proj), both clocked on charge_started_at, never
-    on plug-on (D3). Returns None when the SoC itself is untrustworthy,
-    mirroring the YAML sensor's `availability`.
+    max(reading_proj, session_proj), both clocked on charge_started_at,
+    never on plug-on: a cable can sit plugged in for an hour before current
+    flows. Returns None when the SoC itself is untrustworthy, so callers
+    must handle "no answer" rather than reading a fabricated one.
     """
     if not soc_trustworthy or current_soc is None:
         return None
@@ -170,9 +176,10 @@ def projected_soc(
 
 
 def classify_source(car_charging: bool, plug_delivering: bool) -> ChargeSource:
-    """sensor.ev_charge_source (packages/ev_charging.yaml:751), D7: the
-    car's own status is the authority on WHETHER it is charging; the plug's
-    power draw is the authority on WHAT is delivering it."""
+    """The car's own status is the authority on WHETHER it is charging;
+    the plug's power draw is the authority on WHAT is delivering it. Keeping
+    those two questions separate is what makes a bypass charge -- car
+    charging, plug idle -- detectable at all."""
     if car_charging and plug_delivering:
         return ChargeSource.PLUG
     if car_charging:
@@ -193,9 +200,8 @@ def _daily_wakeup_due(
     a missed tick around the target time (a restart at 05:59, a slow poll
     at 06:01) neither loses the day's wakeup nor fires it twice.
 
-    Ported from opel_daily_wakeup (packages/opel.yaml:884-898), but
-    budget-aware where the YAML was not -- see reduce()'s daily-wakeup
-    block for the gates that decide whether a due wakeup is worth spending.
+    Being due is not enough to spend it -- see reduce()'s daily-wakeup
+    block for the gates that decide whether a due wakeup buys anything.
     """
     scheduled = datetime.combine(now.date(), target_time, tzinfo=now.tzinfo)
     if now < scheduled:
@@ -232,8 +238,10 @@ def _mark_complete(state: SessionState, now: datetime) -> SessionState:
 
 
 def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
-    """The whole decision, in one call. See plan section 3 for the ordering
-    rationale and session.py for the session sub-reducer this calls first.
+    """The whole decision, in one call.
+
+    The branch order below is by safety, not readability: see the comments
+    on each step. session.py holds the session sub-reducer this calls first.
     """
     events: list[Event] = []
     state = prev
@@ -246,7 +254,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # freshness clock and threshold the rescue wakeup uses (2x the expected
     # reporting gap): past that point the feed is already known to be
     # unhealthy, and a cached "charging" that old is no more trustworthy
-    # than no reading at all. Below it, trust it exactly as the YAML did.
+    # than no reading at all. Below it, trust it.
     car_status_fresh = inp.soc_changed_at is not None and (
         inp.now - inp.soc_changed_at
     ) <= timedelta(minutes=inp.expected_gap_min * RESCUE_WAKEUP_GAP_MULTIPLE)
@@ -266,11 +274,10 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # fires only on "the car itself was reporting charging, and now reports
     # finished" -- the ONE completion signal that works no matter how the
     # car was charged (plug, EVSE straight into the wall, or a public
-    # charger this integration never sees). Ported from opel_charge_complete
-    # (packages/opel.yaml:913-950).
+    # charger this integration never sees).
     car_finished_edge = inp.car_charge_finished and state.prev_car_charging
 
-    # The sticky companion to charge_source (D7): captured whenever there is
+    # The sticky companion to charge_source: captured whenever there is
     # an actual source to capture, so it still holds the right answer once
     # charge_source itself has fallen back to NONE -- which is exactly the
     # state it's in by the time a car-confirmed completion can fire.
@@ -293,7 +300,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     if plug_on_edge:
         state = replace(state, plug_turned_on_by=Owner.EXTERNAL, plug_on_since=inp.now)
     if plug_off_edge:
-        # A human switching a plug WE own off (plan 3.3): this must take
+        # A human switching a plug WE own off: this must take
         # effect on the SAME tick's plug decision below, not just be
         # recorded for next time -- otherwise the below-target branch
         # would immediately turn it back on within this very reduce()
@@ -568,8 +575,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # ---- 4. in window ----
     if window_open:
         if inp.mode == ChargeMode.SMART and not soc_trustworthy:
-            # FR-S4 / D8: fail closed, but never fail silent, and only once
-            # per window occurrence (plan section 3.2).
+            # Fail closed, but never fail silent, and only once per
+            # window occurrence.
             wid = window_instance_id(inp.now, inp.window_start, inp.window_end)
             grace_ok = state.ha_started_at is not None and (
                 inp.now - state.ha_started_at
@@ -639,15 +646,14 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     else:
         # ---- 5. outside window ----
         if inp.ha_start_edge and inp.plug_switch_on and state.plug_turned_on_by == Owner.UNKNOWN:
-            # D8/R1: a restart loses in-memory ownership. Outside the
+            # A restart loses in-memory ownership. Outside the
             # window, a plug that is on with unknown ownership might be a
             # charge WE started that would otherwise run unbounded -- the
             # exact failure R1 exists to prevent, reached by a different
             # road. Cannot tell that apart from a human's deliberate
             # outside-window manual charge, so fail closed rather than
             # silently trust it: cut it and say so, once, on this first
-            # post-restart evaluation only (plan section 3.3 / review
-            # finding on ownership loss).
+            # post-restart evaluation only.
             events.append(Event(EVENT_RESTART_RECONCILED_OFF, {}))
             state = replace(state, plug_turned_on_by=Owner.UNKNOWN)
             plug = PlugAction.OFF

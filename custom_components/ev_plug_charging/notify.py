@@ -2,10 +2,9 @@
 configured notify service if one is set, and -- for persistent conditions
 -- as a self-clearing Repairs issue.
 
-This is the single chokepoint script.ev_notify_ricardo used to be
-(packages/ev_charging.yaml:410-429), generalised: any notify.* service, not
-one hard-coded group, plus events so a user can build their own automations
-without needing a specific notify platform at all.
+One chokepoint, so every reportable condition goes out the same way: any
+notify.* service the user configures, or none at all -- the events fire
+regardless, so an automation can be built without any notify platform.
 """
 from __future__ import annotations
 
@@ -36,12 +35,11 @@ _TITLES = {
     f"{DOMAIN}_aux_battery_critical": "EV - 12V battery critically low",
 }
 
-# script.opel_notify_critical / opel_notify_emergency (packages/opel.yaml:
-# 174-225) send with critical/time-sensitive push data so they break
-# through a silenced phone; opel_notify_push sends plain "high" for
-# everything else. Ported the same split here rather than one flat
-# priority for every event -- an overheat cutoff or a critically low 12V
-# battery is not "informational" the way "charge started" is.
+# These go out on the critical/time-sensitive push channel, so they break
+# through a silenced phone; everything else sends plain "high". One flat
+# priority for every event would be wrong in both directions -- an
+# overheat cutoff is not "informational" the way "charge started" is, and
+# "charge started" does not deserve to wake anyone up.
 _CRITICAL_EVENTS = frozenset(
     {
         f"{DOMAIN}_overheat_cutoff",

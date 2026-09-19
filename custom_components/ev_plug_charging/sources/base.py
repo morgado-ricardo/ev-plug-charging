@@ -8,7 +8,7 @@ quirks, and what makes adding a second source a self-contained job.
 Two errors, deliberately source-neutral: a source that cannot be reached
 (`SourceConnectionError`) is a different thing from one that answered with
 something unusable (`SourceResponseError`). The coordinator treats both the
-same way -- an unreachable snapshot, which is fail-closed via FR-S4 -- but
+same way -- an unreachable snapshot, which fails closed -- but
 the config flow reports them differently, because "wrong address" and
 "wrong vehicle" need different fixes from the user.
 """
@@ -56,7 +56,7 @@ class TelemetrySource(ABC):
 
     #: False for a source that has no way to ask for a fresh reading, in
     #: which case the coordinator never spends the one-per-session rescue
-    #: refresh (D5) and the refresh button becomes a no-op.
+    #: refresh and the refresh button becomes a no-op.
     supports_refresh: bool = False
 
     #: False for a source that has no 12V auxiliary-battery signal at all,
@@ -99,7 +99,7 @@ class TelemetrySource(ABC):
     async def async_request_refresh(self) -> bool:
         """Ask the source for a fresh reading, if it can.
 
-        This is D5's one-per-session rescue attempt -- for a cloud-backed
+        This is the one-per-session rescue attempt -- for a cloud-backed
         vehicle API it typically wakes the car and costs 12V charge, which
         is why the coordinator gates it so tightly. Returns True if a
         refresh was actually requested.

@@ -40,9 +40,7 @@ CONF_CHARGING_STATE_STRING = "charging_state_string"
 # The car's own terminal "charge finished" status string -- a SEPARATE
 # signal from CONF_CHARGING_STATE_STRING above. It is the only completion
 # path that works no matter how the car was charged (plug, EVSE straight
-# into the wall, or a public charger with no telemetry of its own) --
-# ported from opel_charge_complete (packages/opel.yaml:913-950), whose own
-# comment calls this out explicitly.
+# into the wall, or a public charger with no telemetry of its own).
 CONF_CHARGE_FINISHED_STATE_STRING = "charge_finished_state_string"
 
 DEFAULT_PSACC_URL = "http://homeassistant.local:5000"
@@ -82,39 +80,42 @@ DEFAULT_EXPECTED_GAP_MINUTES = 40
 DEFAULT_POWER_THRESHOLD_W = 50
 DEFAULT_WINDOW_START: time = time(23, 0)
 DEFAULT_WINDOW_END: time = time(7, 0)
-# Daily wakeup (D5's rescue refresh only runs DURING a session; between
-# sessions the feed can go stale for as long as the gap between one
-# session's end and the next window's open -- ported from
-# opel_daily_wakeup, packages/opel.yaml:884-898). Off by default: unlike
-# the rescue refresh, this is a second, independent budget line the user
-# opts into per source.
+# Daily wakeup. The rescue refresh only runs DURING a session, so between
+# sessions the feed can go stale for as long as the gap from one session's
+# end to the next window's open -- which makes the first projection of the
+# night the worst one, exactly when it matters most. Off by default: unlike
+# the rescue refresh, this is a second, independent 12V budget line, and
+# the user opts into it.
 DEFAULT_DAILY_WAKEUP_ENABLED = False
 DEFAULT_DAILY_WAKEUP_TIME: time = time(6, 0)
 
-# --- Timing constants (ported from packages/ev_charging.yaml) ---------------
+# --- Timing constants --------------------------------------------------------
 # Session-cap margin over the (possibly learned) rate. Measured: at 1.0x the
 # cap landed +2/+8/+19 min from the real crossing on three logged healthy
-# sessions; at 1.15x the slack is +56/+75/+41 min. See docs D2.
+# sessions; at 1.15x the slack is +56/+75/+41 min. 1.0x is too tight to
+# absorb a slow night without cutting the charge short.
 SESSION_CAP_MARGIN = 1.15
 
-# Window-start restart settle wait (FR-S6): REST sensors may not have polled
-# yet right after a restart during the window.
+# Window-start restart settle wait: source sensors may not have polled yet
+# right after a restart that lands inside the window.
 WINDOW_START_GRACE_SECONDS = 180
 
-# Dwell/debounce durations, all ported verbatim from the YAML.
-CHARGE_STARTED_NOTIFY_DELAY_SECONDS = 120  # ev_charge_started_notify
-TIMED_START_DWELL_SECONDS = 30  # ev_timed_charge_started_notify
-POWER_DROP_COMPLETE_DWELL_SECONDS = 300  # ev_charge_power_drop_complete
-BYPASS_DEBOUNCE_SECONDS = 300  # binary_sensor.ev_shelly_bypassed delay_on
-EVSE_NO_POWER_DWELL_SECONDS = 300  # ev_charge_resume_check
+# Dwell/debounce durations. Each exists because the underlying signal is
+# noisy on a timescale shorter than this and acting on the noise is worse
+# than acting late.
+CHARGE_STARTED_NOTIFY_DELAY_SECONDS = 120
+TIMED_START_DWELL_SECONDS = 30
+POWER_DROP_COMPLETE_DWELL_SECONDS = 300
+BYPASS_DEBOUNCE_SECONDS = 300
+EVSE_NO_POWER_DWELL_SECONDS = 300
 
-# Rescue wakeup: only past 2x the expected reporting gap (D5).
+# Rescue wakeup: only past 2x the expected reporting gap.
 RESCUE_WAKEUP_GAP_MULTIPLE = 2.0
 
 # Overheat cutoff hysteresis, to avoid oscillating re-notify once cut.
 OVERHEAT_HYSTERESIS_C = 5.0
 
-# Rate-model guardrails (see docs section 5 of the port plan).
+# Rate-model guardrails -- see rate_model.py for what each one rules out.
 RATE_MODEL_MIN_SAMPLES = 3
 RATE_MODEL_SAMPLE_WINDOW = 5
 RATE_MODEL_MIN_SESSION_MINUTES = 45
@@ -122,13 +123,11 @@ RATE_MODEL_MIN_SOC_GAIN = 10.0
 RATE_MODEL_CLAMP_LOW = 0.85
 RATE_MODEL_CLAMP_HIGH = 2.0
 
-# 12V auxiliary-battery health (aux_battery.py). Bands and thresholds are
-# the YAML's proven ones (packages/opel.yaml:481-503), just re-homed onto a
-# simpler 4-entity model -- see aux_battery.py's module docstring.
+# 12V auxiliary-battery health -- see aux_battery.py for the bands.
 AUX_BATTERY_HEALTHY_THRESHOLD = 70.0
 AUX_BATTERY_LOW_THRESHOLD = 50.0
 AUX_BATTERY_CRITICAL_THRESHOLD = 30.0
-AUX_BATTERY_LOW_DWELL_SECONDS = 6 * 3600  # opel_12v_low's 6h "for"
+AUX_BATTERY_LOW_DWELL_SECONDS = 6 * 3600  # so one cold morning isn't an alert
 AUX_BATTERY_ROLLING_DAYS = 7
 AUX_BATTERY_BASELINE_DAYS = 30
 AUX_BATTERY_SAMPLE_WINDOW_DAYS = 30  # ring-buffer cap -- one entry per day

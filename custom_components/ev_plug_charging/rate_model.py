@@ -7,7 +7,7 @@ means whichever rate is fed in decides the stop on a healthy night -- if
 learning is allowed to make that rate faster than reality, the charge stops
 *early*. Quantified against R1 (790 minutes of silence): a learned rate at
 a naive 0.6x-of-seed clamp floor stops the charge 26 percentage points
-short. See the port plan section 5 for the full derivation.
+short. That is not a hypothetical; it happened.
 
 The fix is structural, not a tighter clamp: `effective_rate(...)` always
 returns max(learned, seed), so learning can only ever push the projection
@@ -35,12 +35,11 @@ from .models import RateSnapshot, SessionState
 
 
 def seed_rate(capacity_kwh: float, power_kw: float, efficiency: float) -> float:
-    """Minutes per 1% SoC from configured (or observed-average) numbers.
-    Ported verbatim from sensor.ev_minutes_per_percent
-    (packages/ev_charging.yaml:484-495): the seed is also the permanent
-    FLOOR under the learned rate (see effective_rate below), so a fresh
-    install with zero sessions behaves exactly like the YAML's
-    float(20.2) default.
+    """Minutes per 1% SoC from the configured capacity/power/efficiency.
+
+    This is also the permanent FLOOR under the learned rate (see
+    effective_rate below), so a fresh install with zero sessions behaves
+    exactly as if learning were switched off.
     """
     if power_kw <= 0 or efficiency <= 0:
         raise ValueError("power_kw and efficiency must be positive")
@@ -70,7 +69,7 @@ def clamp(rate: float, seed: float) -> float:
 
 
 def effective_rate(samples: tuple[float, ...], seed: float) -> RateSnapshot:
-    """The rate used for BOTH projection terms (plan section 5). Always
+    """The rate used for BOTH projection terms. Always
     >= seed: learning can only make the projection -- and therefore the
     stop -- run later, never earlier. This property is asserted directly
     in tests/test_rate_model.py for every accepted sample sequence.
@@ -87,9 +86,11 @@ def solve_anchor_correction(
     now: datetime,
     rate: RateSnapshot,
 ) -> float:
-    """D4: back-solve the virtual start SoC that reproduces `fresh_soc` at
+    """Back-solve the virtual start SoC that reproduces `fresh_soc` at
     `now`, given the elapsed time so far -- moves the anchor VALUE without
-    moving the CLOCK. Clamped -30..130 (packages/ev_charging.yaml:185-187).
+    moving the CLOCK, so the session cap still bounds the same real
+    duration. Clamped -30..130 to keep a wild reading from producing a
+    nonsensical anchor.
     Uses the same cap_rate (rate x margin) as logic.projected_soc's session
     term, or the correction would not reproduce the reading there.
     """
@@ -112,21 +113,22 @@ class CompletedSession:
 
 
 def accept_session(session: CompletedSession) -> bool:
-    """Sample acceptance rules (plan section 5). A session contributes a
+    """Sample acceptance rules. A session contributes a
     rate sample only if all of these hold -- each guards against a specific
     way a bad sample would corrupt the stop:
 
     - non-provisional/corrected anchor: an unresolved provisional anchor
-      means we do not actually know when charging started (D4).
+      means we do not actually know what the SoC was when charging
+      started, so the gain is guesswork.
     - >= 45 min: short sessions are dominated by measurement noise.
     - >= 10 points of SoC gain: same reason, for the numerator.
     - never ran above target: the linear rate model is invalid in the
-      constant-voltage taper (docs section 6.4); learning from a taper
+      constant-voltage taper above roughly 80%; learning from a taper
       session would bias the rate slow for the normal below-target range
       it is actually used for -- the opposite failure from the one this
       module exists to prevent, but still wrong.
     - stayed on the plug throughout: a bypass session's energy figures
-      describe the wall socket, not what the plug delivered (D7).
+      describe the wall socket, not what the plug delivered.
     - ended on target-reached or power-drop, not window-close or a fault:
       those endings don't tell you the car's real rate, just where the
       clock or a safety cutoff happened to land.

@@ -1,8 +1,8 @@
 """source.py: the freshness clock, which is SHARED by every telemetry
 source and must behave identically regardless of which one produced the
-reading. This is called out as the highest-risk line in the port plan -- if
-soc_changed_at tracks poll time instead of value change, every staleness and
-projection decision silently degrades while looking healthy.
+reading. It is the highest-risk code in the integration: if soc_changed_at
+tracks poll time instead of value change, every staleness and projection
+decision silently degrades while looking perfectly healthy.
 
 PSACC's own JSON parsing is tested separately in test_source_psacc.py; here
 we exercise `derive_freshness` directly, so a future source that gets the
@@ -41,9 +41,8 @@ def test_first_reading_is_fresh():
 
 
 def test_repeated_identical_value_does_not_advance_clock():
-    """The load-bearing case: a poll re-delivering the SAME cached SoC must
-    NOT look fresh, matching packages/ev_charging.yaml:878-882's note about
-    last_changed vs. a re-delivered cached value."""
+    """The load-bearing case: a poll re-delivering the SAME cached SoC has
+    learned nothing, so it must NOT look fresh."""
     prev = _snap(50.0, T0)
     later = T0 + timedelta(minutes=30)
     changed_at, _ = derive_freshness(prev, 50.0, None, later)

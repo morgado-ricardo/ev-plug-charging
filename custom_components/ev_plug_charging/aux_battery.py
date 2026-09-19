@@ -1,10 +1,9 @@
-"""12V auxiliary-battery health, deliberately simpler than the YAML's
-seven sensors -- four entities instead: `aux_battery` (the raw reading),
-`aux_battery_resting` (the same value, but only comparable samples --
-charging and driving both inflate it), `aux_battery_7d` (a rolling mean),
-and `aux_battery_health` (a band, with the 7d-vs-30d drift as an
-attribute rather than its own entity -- see AGENTS.md's port notes for
-why `days_since_driven` and a separate 30d-average entity were left out).
+"""12V auxiliary-battery health in four entities: `aux_battery` (the raw
+reading), `aux_battery_resting` (the same value, but only comparable
+samples -- charging and driving both inflate it), `aux_battery_7d` (a
+rolling mean of one resting sample per day), and `aux_battery_health` (a
+band, carrying the 7d-vs-30d drift as an attribute rather than as its own
+entity -- the ring buffer that computes the band already holds it).
 
 Every "don't wake the car" decision in this integration exists to protect
 this battery; before this module, the integration had no way to show
@@ -86,8 +85,8 @@ def rolling_mean(
 
 
 def health_band(avg_7d: Optional[float]) -> str:
-    """healthy / watch / low / unknown -- the YAML's own proven bands
-    (packages/opel.yaml:161-176), unchanged."""
+    """healthy / watch / low / unknown, from the 7-day resting mean. The
+    raw reading is far too noisy tick to tick to band directly."""
     if avg_7d is None:
         return "unknown"
     if avg_7d >= AUX_BATTERY_HEALTHY_THRESHOLD:
@@ -130,10 +129,9 @@ def advance_aux_battery(
     """One call per coordinator tick, after logic.reduce() -- the same
     "second pure step over the state reduce() just returned" shape
     coordinator._track_energy already uses. `at_rest` is the caller's
-    `not decision.charging_active`: charging and driving both inflate the
-    12V reading, matching the YAML's own resting-sensor gate
-    (packages/opel.yaml:469-481, D7's "actuator truth vs car truth" split
-    applied to a different battery).
+    `not decision.charging_active`: the DC-DC converter tops the 12V
+    battery up whenever the car is awake, so a reading taken then looks
+    healthy right up until the car is parked.
     """
     events: list[Event] = []
 
@@ -149,8 +147,7 @@ def advance_aux_battery(
     health = health_band(avg_7d)
 
     # -- low: the 7-day trend, held for AUX_BATTERY_LOW_DWELL_SECONDS so a
-    # single cold-morning dip can't trigger it (opel_12v_low's own reason
-    # for its 6h "for") --
+    # single cold-morning dip can't trigger it --
     low_now = avg_7d is not None and avg_7d < AUX_BATTERY_LOW_THRESHOLD
     since, held = _dwell(low_now, state.aux_battery_low_since, now)
     state = replace(state, aux_battery_low_since=since)
@@ -164,7 +161,8 @@ def advance_aux_battery(
         state = replace(state, aux_battery_low_notified=False)
 
     # -- critical: the LEVEL right now (on a resting reading), not the
-    # trend -- opel_12v_critical's own distinction. Deliberately only
+    # trend. A battery can be flat today without a declining 7-day mean,
+    # and that still needs saying now. Deliberately only
     # evaluated on a resting tick: while the car is charging or driving,
     # the DC-DC converter is actively feeding the 12V, so "is it critical
     # right now" isn't a meaningful question until it's at rest again. --
