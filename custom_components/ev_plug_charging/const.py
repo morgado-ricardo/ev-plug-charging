@@ -109,6 +109,13 @@ POWER_DROP_COMPLETE_DWELL_SECONDS = 300
 BYPASS_DEBOUNCE_SECONDS = 300
 EVSE_NO_POWER_DWELL_SECONDS = 300
 
+# How long after WE command the plug off we still recognise the observed
+# off as ours rather than a human's. The plug's state change normally
+# arrives within a second (a state listener), so this is generous; it is
+# bounded at all only so a command that silently failed can't make us
+# ignore a real human override forever.
+OWN_OFF_OBSERVATION_GRACE_SECONDS = 300
+
 # Rescue wakeup: only past 2x the expected reporting gap.
 RESCUE_WAKEUP_GAP_MULTIPLE = 2.0
 

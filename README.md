@@ -287,6 +287,59 @@ Settings → Devices & Services → EV Plug Charging → ⋮ → **Download
 diagnostics** gives you the full anchor, projection and rate-model state
 plus the last decision's reason.
 
+## Debugging a charge that didn't start
+
+There are no automations here, so there are no traces to step through. One
+`reduce()` call per tick decides everything, and it says why.
+
+**Start with the reason.** Developer Tools → States →
+`sensor.*_projected_soc`, attribute `decision_reason`:
+
+| `decision_reason` | Means |
+|---|---|
+| `below_target` | It **is** charging — the plug should be on |
+| `in_window_no_action` | In the window, but something is suppressing a start |
+| `outside_window_not_ours` | Outside the window. Check the window entities, and check the clock |
+| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed |
+| `disabled` | `switch.*_enabled` is off |
+| `target_reached` | Already at or over target |
+| `timed_window` | Timed mode, ignoring state of charge |
+
+**Then turn on the per-tick log.** In `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.ev_plug_charging: debug
+```
+
+One line per tick, with everything the decision was made from:
+
+```
+tick 2026-09-19T22:45:00+01:00 | below_target -> plug on | soc=69.0 proj=69.0
+target=80.0 | window 22:40:00-08:00:00 in=True | enabled=True mode=smart
+plug_on=False power=1800.0W | silence=0min stale=False source=plug_idle |
+manual_off_until=None
+```
+
+Read it left to right: the reason, what it did about it, the numbers behind
+the target comparison, whether the window was open *at that wall-clock
+time*, and the two things most likely to be suppressing a start —
+`manual_off_until`, and `enabled`.
+
+Plug actuations are also logged at INFO, so a charge starting or stopping
+shows up without opting into debug.
+
+**`manual_off_until`** is worth knowing about. If you switch off a plug this
+integration turned on, it takes that as an override and stands down for the
+rest of that window rather than switching it straight back on. It only does
+this for an off *inside* the window, and never for an off it commanded
+itself. If you see a future timestamp there and you didn't expect it, that
+is why nothing is happening.
+
+**Download diagnostics** (above) if the log doesn't answer it — that has the
+anchor, the rate model and the full persisted state.
+
 ## Scope and limitations
 
 - **One car, one plug per config entry.** Add a second entry for a second

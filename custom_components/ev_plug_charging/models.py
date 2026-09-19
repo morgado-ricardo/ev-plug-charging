@@ -170,6 +170,12 @@ class SessionState:
     # drops) fires. --
     last_charge_source: ChargeSource = ChargeSource.NONE
 
+    # -- when WE last commanded the plug off, so the next tick's observed
+    # plug-off edge can tell our own actuation apart from a human reaching
+    # for the switch. Without it every stop we make looks like an override
+    # of ourselves. --
+    own_off_commanded_at: Optional[datetime] = None
+
     # -- fields the rate model needs to recognise a completed, acceptable
     # session (see rate_model.accept_session) --
     session_ran_above_target: bool = False
