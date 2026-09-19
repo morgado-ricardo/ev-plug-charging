@@ -1,0 +1,102 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "De onde vem o estado de carga?",
+        "description": "Escolhe a fonte de telemetria para o nível da bateria do teu veículo. Mais fontes estão a caminho — hoje só o PSA Car Controller é suportado.",
+        "data": {
+          "source_type": "Fonte de telemetria"
+        }
+      },
+      "psacc": {
+        "title": "PSA Car Controller",
+        "description": "A ligação é testada antes de continuares, para que um endereço ou ID de veículo errado seja apanhado agora e não na primeira consulta esta noite.",
+        "data": {
+          "psacc_url": "URL base do PSACC",
+          "vin": "Identificação do veículo (VIN)",
+          "charging_state_string": "Texto de estado \"a carregar\"",
+          "charge_finished_state_string": "Texto de estado \"carregamento concluído\""
+        }
+      },
+      "actuator": {
+        "title": "A tomada",
+        "description": "O interruptor que corta a energia ao EVSE, e o sensor que reporta quanta potência está a consumir.",
+        "data": {
+          "plug_switch_entity_id": "Interruptor da tomada",
+          "plug_power_sensor_entity_id": "Sensor de potência da tomada"
+        }
+      },
+      "advanced": {
+        "title": "Avançado",
+        "description": "Sinais opcionais e o modelo de taxa de carregamento. Os valores por omissão são razoáveis; podes deixá-los como estão.",
+        "data": {
+          "plug_energy_sensor_entity_id": "Sensor de energia da tomada",
+          "plug_temperature_sensor_entity_id": "Sensor de temperatura da tomada",
+          "temperature_limit_c": "Limite de temperatura da tomada (°C)",
+          "battery_capacity_kwh": "Capacidade da bateria (kWh)",
+          "charge_power_kw": "Potência de carga (kW)",
+          "charge_efficiency": "Eficiência de carga",
+          "poll_interval_seconds": "Intervalo de consulta (segundos)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível alcançar o PSACC. Verifica o URL.",
+      "no_vehicle_data": "O PSACC respondeu, mas não tem dados para este VIN.",
+      "invalid_response": "O PSACC devolveu uma resposta inesperada."
+    },
+    "abort": {
+      "already_configured": "Esta fonte PSACC e VIN já estão configurados.",
+      "unsupported_source": "Essa fonte de telemetria ainda não está implementada."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções do EV Plug Charging",
+        "data": {
+          "plug_energy_sensor_entity_id": "Sensor de energia da tomada",
+          "plug_temperature_sensor_entity_id": "Sensor de temperatura da tomada",
+          "temperature_limit_c": "Limite de temperatura da tomada (°C)",
+          "battery_capacity_kwh": "Capacidade da bateria (kWh)",
+          "charge_power_kw": "Potência de carga (kW)",
+          "charge_efficiency": "Eficiência de carga",
+          "poll_interval_seconds": "Intervalo de consulta (segundos)",
+          "notify_service": "Serviço de notificação",
+          "muted_events": "Eventos silenciados",
+          "rescue_refresh_enabled": "Permitir a única atualização de resgate por sessão"
+        }
+      }
+    }
+  },
+  "issues": {
+    "ev_plug_charging_overheat_cutoff": {
+      "title": "Tomada EV em sobreaquecimento",
+      "description": "A tomada foi desligada automaticamente por exceder o limite de temperatura. Inspeciona a tomada e o cabo antes de reativar o carregamento."
+    },
+    "ev_plug_charging_bypass_detected": {
+      "title": "Carregamento EV direto da parede",
+      "description": "O carro está a carregar mas não através da tomada configurada. O Home Assistant não pode parar este carregamento -- desliga manualmente quando terminar."
+    },
+    "ev_plug_charging_evse_no_power": {
+      "title": "Carregamento EV não detetado",
+      "description": "A tomada está ligada e o carro está ligado ao cabo, mas não foi detetada potência durante 5 minutos. O EVSE pode precisar de um reset manual."
+    },
+    "ev_plug_charging_charge_not_started": {
+      "title": "Carregamento EV não iniciado",
+      "description": "A janela de carregamento abriu mas o estado de carga do carro não pôde ser confiado, pelo que o carregamento não foi iniciado."
+    },
+    "ev_plug_charging_restart_reconciled_off": {
+      "title": "Carregamento EV parado após reinício",
+      "description": "O Home Assistant reiniciou com a tomada ligada fora da janela de carregamento sem registo de quem a ligou, pelo que foi desligada por precaução."
+    },
+    "ev_plug_charging_aux_battery_low": {
+      "title": "Bateria de 12V EV a ficar fraca",
+      "description": "A média de 7 dias em repouso da bateria auxiliar de 12V caiu abaixo dos 50%. Considera uma carga lenta se isto persistir."
+    },
+    "ev_plug_charging_aux_battery_critical": {
+      "title": "Bateria de 12V EV criticamente fraca",
+      "description": "O estado de carga em repouso da bateria auxiliar de 12V caiu abaixo dos 30% -- suficientemente baixo para o carro poder falhar ao acordar ou arrancar em breve. Conduz durante 30+ minutos ou liga um carregador lento."
+    }
+  }
+}

@@ -1,0 +1,317 @@
+# EV Plug Charging — example dashboard (Mushroom variant)
+# =====================================================================
+# A denser, tile-based alternative to dashboard.yaml. Same entities,
+# same information; nicer on a phone.
+#
+# REQUIRES ONE HACS FRONTEND PACKAGE:
+#   Mushroom — https://github.com/piitaya/lovelace-mushroom
+#   (HACS → Frontend → "Mushroom". Nothing else: this file uses only
+#   mushroom-title-card and mushroom-template-card.)
+#
+# If you would rather not install anything, use dashboard.yaml instead —
+# it is core cards only and shows the same things.
+#
+# SAME TWO SETUP STEPS AS dashboard.yaml:
+#   1. Rename the integration's device to "EV" and let Home Assistant
+#      rename the entity IDs with it, so they read `sensor.ev_*`.
+#   2. Find and replace YOUR_PLUG with your own plug's entity IDs.
+#
+# Paste via the dashboard's ⋮ → "Raw configuration editor".
+# =====================================================================
+
+views:
+  - title: EV
+    path: ev
+    icon: mdi:ev-station
+    cards:
+      # -- Bypass warning (core markdown; a tile is too small for this) -
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ev_charging_bypassed
+            state: "on"
+        card:
+          type: markdown
+          content: >-
+            ## ⚡ Charging direct from the wall
+
+
+            Not through the configured plug — Home Assistant **cannot stop
+            this charge at your target**. Unplug manually. Plug figures
+            below describe the plug, not this charge.
+
+      - type: custom:mushroom-title-card
+        title: Charging
+
+      # -- State of charge: reported vs projected ---------------------
+      # The gap between the two is the staleness of the feed. Secondary
+      # line spells it out rather than making you compare two numbers.
+      - type: custom:mushroom-template-card
+        entity: sensor.ev_projected_soc
+        primary: >-
+          {{ states('sensor.ev_projected_soc') | round(0) }}% projected ·
+          target {{ states('number.ev_target_soc') | int(80) }}%
+        secondary: >-
+          {% set rep = states('sensor.ev_battery_soc') %} {% set proj =
+          states('sensor.ev_projected_soc') %} {% if rep not in ['unknown',
+          'unavailable'] and proj not in ['unknown', 'unavailable'] %} {% set
+          gap = (proj | float(0)) - (rep | float(0)) %} Car last reported {{ rep
+          | round(0) }}%{% if gap | abs >= 1 %} · projecting {{ gap |
+          round(1) }} ahead{% endif %} {% else %} No reported state of charge {%
+          endif %}
+        icon: mdi:battery-charging-80
+        icon_color: >-
+          {% if is_state('binary_sensor.ev_soc_stale', 'on') %}orange {% elif
+          (states('sensor.ev_projected_soc') | float(0)) >=
+          (states('number.ev_target_soc') | float(80)) %}green {% else %}blue{%
+          endif %}
+        tap_action:
+          action: more-info
+
+      # -- Charge mode cycler -----------------------------------------
+      # Tap to flip Smart ⇄ Timed. Secondary shows what that mode means
+      # right now, so the window and target are readable at a glance.
+      - type: custom:mushroom-template-card
+        entity: select.ev_charge_mode
+        primary: >-
+          {% if is_state('select.ev_charge_mode', 'smart') %}Mode: Smart {% else
+          %}Mode: Timed{% endif %}
+        secondary: >-
+          {% if not is_state('switch.ev_enabled', 'on') %}Disabled — watching
+          only {% elif is_state('select.ev_charge_mode', 'smart') %} {{
+          states('time.ev_window_start')[0:5] }}–{{
+          states('time.ev_window_end')[0:5] }} · to {{
+          states('number.ev_target_soc') | int(80) }}% {% else %} {{
+          states('time.ev_window_start')[0:5] }}–{{
+          states('time.ev_window_end')[0:5] }} · ignores state of charge {%
+          endif %}
+        icon: >-
+          {% if is_state('select.ev_charge_mode', 'smart') %}mdi:ev-station {%
+          else %}mdi:timer-cog{% endif %}
+        icon_color: >-
+          {% if not is_state('switch.ev_enabled', 'on') %}grey {% elif
+          is_state('select.ev_charge_mode', 'smart') %}green {% else
+          %}orange{% endif %}
+        tap_action:
+          action: perform-action
+          perform_action: select.select_next
+          target:
+            entity_id: select.ev_charge_mode
+        hold_action:
+          action: more-info
+
+      # -- What is delivering the charge ------------------------------
+      - type: custom:mushroom-template-card
+        entity: sensor.ev_charge_source
+        primary: >-
+          {% set s = states('sensor.ev_charge_source') %} {% if s == 'plug'
+          %}Charging through the plug {% elif s == 'bypass' %}Charging direct
+          from the wall {% elif s == 'plug_idle' %}Plug on, car idle {% else
+          %}Not charging{% endif %}
+        secondary: >-
+          {% set r = state_attr('sensor.ev_projected_soc', 'decision_reason') %}
+          {% if r == 'target_reached' %}Target reached — stopped {% elif r ==
+          'below_target' %}Below target, inside the window {% elif r ==
+          'timed_window' %}Timed charge until the window closes {% elif r ==
+          'window_close' %}Window closed — stopped {% elif r == 'overheat'
+          %}Plug overheated — cut and disabled {% elif r == 'emergency_low_soc'
+          %}Emergency charge, outside the window {% elif r ==
+          'soc_untrustworthy' %}No trustworthy reading — not starting {% elif r
+          == 'disabled' %}Integration disabled {% elif r is none %}Waiting for
+          the first evaluation {% else %}{{ r | replace('_', ' ') }}{% endif %}
+        icon: >-
+          {% set s = states('sensor.ev_charge_source') %} {% if s == 'plug'
+          %}mdi:power-plug {% elif s == 'bypass' %}mdi:transmission-tower-export
+          {% elif s == 'plug_idle' %}mdi:power-plug-outline {% else
+          %}mdi:power-plug-off{% endif %}
+        icon_color: >-
+          {% set s = states('sensor.ev_charge_source') %} {% if s == 'plug'
+          %}green {% elif s == 'bypass' %}orange {% elif s == 'plug_idle'
+          %}grey {% else %}disabled{% endif %}
+        tap_action:
+          action: more-info
+
+      # -- Time remaining, only while it means something --------------
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ev_charging_active
+            state: "on"
+        card:
+          type: custom:mushroom-template-card
+          entity: sensor.ev_estimated_charge_time
+          primary: >-
+            {{ states('sensor.ev_estimated_charge_time') }} h to target
+          secondary: >-
+            {{ states('sensor.ev_charge_needed') | round(0) }}% still needed{% if
+            states('sensor.ev_session_energy') not in ['unknown', 'unavailable']
+            %} · {{ states('sensor.ev_session_energy') | float(0) | round(1) }}
+            kWh so far{% endif %}
+          icon: mdi:timer-sand
+          icon_color: blue
+          tap_action:
+            action: more-info
+
+      - type: custom:mushroom-title-card
+        title: Controls
+
+      - type: entities
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: switch.ev_enabled
+            name: Integration enabled
+          - entity: number.ev_target_soc
+            name: Target SoC
+          - entity: time.ev_window_start
+            name: Window start
+          - entity: time.ev_window_end
+            name: Window end
+          - entity: number.ev_minimum_soc_for_immediate_charge
+            name: Emergency SoC threshold
+
+      # -- Manual override, one tile that flips -----------------------
+      - type: custom:mushroom-template-card
+        entity: switch.YOUR_PLUG
+        primary: >-
+          {% if is_state('switch.YOUR_PLUG', 'on') %}Stop charging {% else
+          %}Start charging{% endif %}
+        secondary: Manual override, ignores the schedule
+        icon: >-
+          {% if is_state('switch.YOUR_PLUG', 'on') %}mdi:battery-off {% else
+          %}mdi:battery-charging-high{% endif %}
+        icon_color: "{% if is_state('switch.YOUR_PLUG', 'on') %}red{% else %}green{% endif %}"
+        tap_action:
+          action: toggle
+
+      - type: custom:mushroom-title-card
+        title: Plug & health
+
+      # -- Plug, hidden while bypassed --------------------------------
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ev_charging_bypassed
+            state: "off"
+        card:
+          type: custom:mushroom-template-card
+          entity: sensor.YOUR_PLUG_power
+          primary: "{{ states('sensor.YOUR_PLUG_power') | float(0) | round(0) }} W"
+          secondary: >-
+            {% set t = states('sensor.YOUR_PLUG_temperature') %} {% if t not in
+            ['unknown', 'unavailable'] %}Plug at {{ t | float(0) | round(0) }}
+            °C{% else %}Plug power{% endif %}
+          icon: mdi:flash
+          icon_color: >-
+            {% if is_state('binary_sensor.ev_plug_overheating', 'on') %}red {%
+            elif is_state('binary_sensor.ev_plug_delivering_power', 'on')
+            %}green {% else %}grey{% endif %}
+          tap_action:
+            action: more-info
+
+      # -- Feed health -------------------------------------------------
+      - type: custom:mushroom-template-card
+        entity: binary_sensor.ev_soc_stale
+        primary: >-
+          {% if is_state('binary_sensor.ev_soc_stale', 'on') %}Feed behind
+          schedule {% elif is_state('binary_sensor.ev_source_reachable', 'off')
+          %}Source unreachable {% else %}Feed healthy{% endif %}
+        secondary: >-
+          {% set s = states('sensor.ev_soc_silence') %} {% if s not in
+          ['unknown', 'unavailable'] %}Silent for {{ s | float(0) | round(0) }}
+          min · expects every {{ states('number.ev_expected_minutes_per_1_soc_report')
+          | int(40) }} {% else %}No reading yet{% endif %}
+        icon: >-
+          {% if is_state('binary_sensor.ev_soc_stale', 'on')
+          %}mdi:timer-alert-outline {% else %}mdi:timer-check-outline{% endif %}
+        icon_color: >-
+          {% if is_state('binary_sensor.ev_soc_stale', 'on') %}orange {% elif
+          is_state('binary_sensor.ev_source_reachable', 'off') %}red {% else
+          %}green{% endif %}
+        tap_action:
+          action: more-info
+
+      # -- The learned charge rate ------------------------------------
+      # sample_count tells you whether it is still on the configured
+      # seed or has started learning from your own sessions.
+      - type: custom:mushroom-template-card
+        entity: sensor.ev_minutes_per_percent
+        primary: >-
+          {{ states('sensor.ev_minutes_per_percent') }} min per 1%
+        secondary: >-
+          {% set n = state_attr('sensor.ev_minutes_per_percent', 'sample_count')
+          | int(0) %} {% if n == 0 %}From your configured figures — no sessions
+          learned yet {% elif n < 3 %}{{ n }} session{{ 's' if n != 1 else '' }}
+          recorded — needs 3 to start learning {% else %}Learned from {{ n }}
+          sessions{% endif %}
+        icon: mdi:speedometer
+        icon_color: >-
+          {% set n = state_attr('sensor.ev_minutes_per_percent', 'sample_count')
+          | int(0) %} {% if n >= 3 %}green{% else %}grey{% endif %}
+        tap_action:
+          action: more-info
+
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_last_charge_source
+            name: Last charge source
+          - type: divider
+          - entity: sensor.ev_session_energy
+            name: This session
+          - entity: sensor.ev_monthly_energy
+            name: This month
+          - entity: sensor.ev_lifetime_energy
+            name: Lifetime
+          - type: divider
+          - entity: button.ev_refresh_source
+            name: Request a fresh reading
+          - entity: switch.ev_daily_wakeup
+            name: Daily wakeup
+          - entity: time.ev_daily_wakeup_time
+            name: Daily wakeup time
+          - entity: button.ev_reset_rate_learning
+            name: Reset rate learning
+
+      - type: statistics-graph
+        title: Energy per day
+        period: day
+        chart_type: bar
+        days_to_show: 30
+        stat_types:
+          - change
+        entities:
+          - sensor.ev_lifetime_energy
+
+      - type: custom:mushroom-title-card
+        title: 12V battery
+
+      # Every "don't wake the car" decision in this integration exists to
+      # protect this battery. Only created if your telemetry source
+      # supports it (PSACC does).
+      - type: custom:mushroom-template-card
+        entity: sensor.ev_aux_battery_health
+        primary: >-
+          {{ states('sensor.ev_aux_battery_7d') }}% 7-day average
+        secondary: >-
+          {% set d = state_attr('sensor.ev_aux_battery_health', 'drift') %}
+          {% if d is none %}Reading now: {{ states('sensor.ev_aux_battery') }}%
+          {% elif d > 3 %}Trending down {{ d }} pts vs 30-day baseline {% else
+          %}Reading now: {{ states('sensor.ev_aux_battery') }}%{% endif %}
+        icon: mdi:car-battery
+        icon_color: >-
+          {% set h = states('sensor.ev_aux_battery_health') %} {% if h ==
+          'healthy' %}green {% elif h == 'watch' %}orange {% elif h == 'low'
+          %}red {% else %}grey{% endif %}
+        tap_action:
+          action: more-info
+
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_aux_battery_resting
+            name: Reading at rest
+          - entity: binary_sensor.ev_aux_battery_low
+            name: Trending low
+          - entity: sensor.ev_days_since_charge
+            name: Days since last charge

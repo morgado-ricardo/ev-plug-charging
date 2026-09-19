@@ -1,0 +1,102 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Where does the state of charge come from?",
+        "description": "Pick the telemetry source for your vehicle's battery level. More sources are coming — today only PSA Car Controller is supported.",
+        "data": {
+          "source_type": "Telemetry source"
+        }
+      },
+      "psacc": {
+        "title": "PSA Car Controller",
+        "description": "The connection is tested before you continue, so a wrong address or vehicle ID is caught now rather than on the first poll tonight.",
+        "data": {
+          "psacc_url": "PSACC base URL",
+          "vin": "Vehicle ID (VIN)",
+          "charging_state_string": "Charging-state string",
+          "charge_finished_state_string": "Charge-finished state string"
+        }
+      },
+      "actuator": {
+        "title": "The plug",
+        "description": "The switch that cuts power to the EVSE, and the sensor that reports how much it is drawing.",
+        "data": {
+          "plug_switch_entity_id": "Plug switch",
+          "plug_power_sensor_entity_id": "Plug power sensor"
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "description": "Optional signals and the rate model. Sensible defaults are filled in; you can leave them as-is.",
+        "data": {
+          "plug_energy_sensor_entity_id": "Plug energy sensor",
+          "plug_temperature_sensor_entity_id": "Plug temperature sensor",
+          "temperature_limit_c": "Plug temperature limit (°C)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "charge_power_kw": "Charge power (kW)",
+          "charge_efficiency": "Charge efficiency",
+          "poll_interval_seconds": "Poll interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the PSACC host. Check the URL.",
+      "no_vehicle_data": "PSACC answered, but has no data for this VIN.",
+      "invalid_response": "PSACC returned an unexpected response."
+    },
+    "abort": {
+      "already_configured": "This PSACC source and VIN are already configured.",
+      "unsupported_source": "That telemetry source is not implemented yet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EV Plug Charging options",
+        "data": {
+          "plug_energy_sensor_entity_id": "Plug energy sensor",
+          "plug_temperature_sensor_entity_id": "Plug temperature sensor",
+          "temperature_limit_c": "Plug temperature limit (°C)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "charge_power_kw": "Charge power (kW)",
+          "charge_efficiency": "Charge efficiency",
+          "poll_interval_seconds": "Poll interval (seconds)",
+          "notify_service": "Notify service",
+          "muted_events": "Muted events",
+          "rescue_refresh_enabled": "Allow the one-per-session rescue refresh"
+        }
+      }
+    }
+  },
+  "issues": {
+    "ev_plug_charging_overheat_cutoff": {
+      "title": "EV plug overheating",
+      "description": "The plug was switched off automatically because it exceeded its temperature limit. Inspect the plug and cable before re-enabling charging."
+    },
+    "ev_plug_charging_bypass_detected": {
+      "title": "EV charging direct from the wall",
+      "description": "The car is charging but not through the configured plug. Home Assistant cannot stop this charge -- unplug manually when done."
+    },
+    "ev_plug_charging_evse_no_power": {
+      "title": "EV charging not detected",
+      "description": "The plug is on and the car is plugged in, but no power has been detected for 5 minutes. The EVSE may need a manual reset."
+    },
+    "ev_plug_charging_charge_not_started": {
+      "title": "EV charge not started",
+      "description": "The charge window opened but the car's state of charge could not be trusted, so charging was not started."
+    },
+    "ev_plug_charging_restart_reconciled_off": {
+      "title": "EV charge stopped after restart",
+      "description": "Home Assistant restarted while the plug was on outside the charge window with no record of who turned it on, so it was switched off as a precaution."
+    },
+    "ev_plug_charging_aux_battery_low": {
+      "title": "EV 12V battery trending low",
+      "description": "The 12V auxiliary battery's 7-day resting average has fallen below 50%. Consider a trickle charge if this persists."
+    },
+    "ev_plug_charging_aux_battery_critical": {
+      "title": "EV 12V battery critically low",
+      "description": "The 12V auxiliary battery's resting state of charge has fallen below 30% -- low enough that the car may soon fail to wake or crank. Drive it for 30+ minutes or connect a trickle charger."
+    }
+  }
+}

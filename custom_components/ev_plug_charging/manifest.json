@@ -1,0 +1,13 @@
+{
+  "domain": "ev_plug_charging",
+  "name": "EV Plug Charging",
+  "codeowners": ["@morgado-ricardo"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/morgado-ricardo/ha-ev-plug-charging",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/morgado-ricardo/ha-ev-plug-charging/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

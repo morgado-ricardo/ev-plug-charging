@@ -1,0 +1,80 @@
+mark_completion_notified:
+  name: Mark completion notified
+  description: >-
+    Claims the one-push-per-session completion latch, the way a car-confirmed
+    "Finished" status does. For an external automation that detects
+    completion by its own means (see MIGRATION.md).
+  fields:
+    config_entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: ev_plug_charging
+
+refresh_source:
+  name: Refresh source
+  description: >-
+    Manually requests a fresh reading from the configured telemetry source
+    (the equivalent of the one automatic rescue wakeup, D5, but on demand).
+  fields:
+    config_entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: ev_plug_charging
+
+reset_rate_learning:
+  name: Reset rate learning
+  description: >-
+    Clears the learned charge-rate sample buffer. Use after a capacity or
+    vehicle change -- stale samples plus a new seed give a discontinuous
+    session cap.
+  fields:
+    config_entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: ev_plug_charging
+
+vehicle_command:
+  name: Vehicle command
+  description: >-
+    Executes a named vehicle command through the configured telemetry
+    source's own transport (host, VIN, timeout and error handling are
+    already configured for polling -- this reuses the same connection
+    rather than redeclaring it elsewhere). Fails if the source does not
+    support the requested command; see its diagnostics download for the
+    list it does support.
+  fields:
+    config_entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: ev_plug_charging
+    command:
+      name: Command
+      required: true
+      selector:
+        select:
+          options:
+            - wake
+            - lock
+            - unlock
+            - horn
+            - flash_lights
+            - precondition_start
+            - precondition_stop
+            - charge_start
+            - charge_stop
+    params:
+      name: Parameters
+      description: >-
+        Command-specific extras, e.g. {"count": 3} for horn or
+        {"duration": 20} for flash_lights. Most commands need none.
+      required: false
+      selector:
+        object:

@@ -1,0 +1,311 @@
+# EV Plug Charging — example dashboard
+# =====================================================================
+# Core Home Assistant cards only. No HACS frontend packages needed.
+# (A Mushroom-styled variant is in dashboard-mushroom.yaml.)
+#
+# TWO THINGS TO DO BEFORE PASTING:
+#
+#   1. Rename the integration's device to "EV".
+#      Settings → Devices & Services → EV Plug Charging → the device →
+#      pencil icon → name it "EV" → say YES when it offers to rename the
+#      entity IDs too. That turns the default
+#      `sensor.ev_plug_charging_<your_vin>_projected_soc` into the short
+#      `sensor.ev_projected_soc` this file uses throughout.
+#
+#   2. Replace YOUR_PLUG with your own plug's entity IDs.
+#      These four belong to YOUR smart plug's integration (Shelly, Kasa,
+#      Tasmota, ...), not to this one — it only reads them. Find and
+#      replace `YOUR_PLUG` and you are done:
+#        switch.YOUR_PLUG              the plug's own on/off switch
+#        sensor.YOUR_PLUG_power        the power sensor you configured
+#        sensor.YOUR_PLUG_energy       optional; drop the row if absent
+#        sensor.YOUR_PLUG_temperature  optional; drop the row if absent
+#
+# HOW TO PASTE: open the dashboard → pencil (edit) → ⋮ → "Raw
+# configuration editor" → paste → Save. Pasting this whole file REPLACES
+# that dashboard's config, so use a new empty dashboard, or paste just
+# the `cards:` list into an existing view.
+# =====================================================================
+
+views:
+  - title: EV charging
+    path: ev-charging
+    icon: mdi:ev-station
+    cards:
+      # -- The charge is not coming through our plug ------------------
+      # Only shown when it matters. Plug power/temperature/energy below
+      # describe the PLUG, not this session, so the card that shows them
+      # hides itself at the same time (see "Plug" further down).
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ev_charging_bypassed
+            state: "on"
+        card:
+          type: markdown
+          content: >-
+            ## ⚡ Charging direct from the wall
+
+
+            The car is charging, but **not through the configured plug**.
+            Power, temperature and energy figures below describe the plug,
+            not this charge — ignore them for this session.
+
+
+            Home Assistant has no switch in this circuit, so it **cannot
+            stop the charge at your target** — unplug manually. State of
+            charge will not refresh until the car reports it on its own.
+
+      # -- Reported vs projected -------------------------------------
+      # Side by side on purpose: the gap between them IS the staleness.
+      # A healthy night keeps them within ~1%. A quiet feed shows up here
+      # first, as "projected" climbing while "reported" sits still.
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: gauge
+            entity: sensor.ev_battery_soc
+            name: Reported
+            min: 0
+            max: 100
+            severity:
+              green: 60
+              yellow: 40
+              red: 20
+          - type: gauge
+            entity: sensor.ev_projected_soc
+            name: Projected
+            min: 0
+            max: 100
+            severity:
+              green: 60
+              yellow: 40
+              red: 20
+
+      # -- Why it is doing what it is doing --------------------------
+      # decision_reason is this integration's replacement for Home
+      # Assistant's automation traces: the exact branch that produced the
+      # current plug state. Otherwise only visible in a diagnostics dump.
+      - type: markdown
+        content: >-
+          {% set r = state_attr('sensor.ev_projected_soc', 'decision_reason') %}
+          {% set src = states('sensor.ev_charge_source') %} {% if r ==
+          'target_reached' %}✅ **Target reached** — charging stopped. {% elif r
+          == 'below_target' %}⚡ **Charging** — below target, inside the window.
+          {% elif r == 'timed_window' %}⏱️ **Timed charge** — running until the
+          window closes, SoC ignored. {% elif r == 'window_close' %}🌅 **Window
+          closed** — charging stopped. {% elif r == 'overheat' %}🔥 **Plug
+          overheated** — charging cut and the integration disabled itself.
+          Inspect the plug before re-enabling. {% elif r == 'disabled' %}⏸️
+          **Disabled** — watching only, not controlling the plug. {% elif r ==
+          'emergency_low_soc' %}🚨 **Emergency charge** — below the critical
+          threshold, charging outside the window. {% elif r ==
+          'soc_untrustworthy' %}⚠️ **No trustworthy state of charge** — not
+          starting. Check that the source is reachable. {% elif r ==
+          'restart_reconcile_unknown_owner' %}↩️ **Stopped after a restart** —
+          the plug was on outside the window with no record of who turned it on.
+          {% elif r in ['outside_window_not_ours', 'in_window_no_action'] %}💤
+          **Idle** — nothing to do right now. {% elif r ==
+          'outside_window_we_own_it' %}🌙 **Outside the window** — charging
+          stopped. {% elif r is none %}⏳ Waiting for the first evaluation… {%
+          else %}ℹ️ {{ r }} {% endif %} {% if src == 'bypass' %}
+
+
+          Source: **direct from the wall** (not through the plug). {% endif %}
+
+      # -- This charge ------------------------------------------------
+      - type: entities
+        title: ⚡ This charge
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: sensor.ev_charge_source
+            name: Charge source
+          - entity: binary_sensor.ev_charging_active
+            name: Charging now
+          - type: divider
+          - entity: sensor.ev_battery_soc
+            name: Reported state of charge
+            secondary_info: last-updated
+          - entity: sensor.ev_projected_soc
+            name: Projected state of charge
+          - entity: sensor.ev_charge_needed
+            name: Still needed
+          - entity: sensor.ev_estimated_charge_time
+            name: Estimated time left
+          - entity: sensor.ev_charge_started_at
+            name: Charging since
+          - entity: sensor.ev_last_charge_source
+            name: Last charge source
+
+      # -- Schedule & target ------------------------------------------
+      - type: entities
+        title: 🕙 Schedule & target
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: switch.ev_enabled
+            name: Integration enabled
+          - entity: select.ev_charge_mode
+            name: Charge mode
+          - type: divider
+          - entity: number.ev_target_soc
+            name: Target SoC
+          - entity: time.ev_window_start
+            name: Window start
+          - entity: time.ev_window_end
+            name: Window end
+          - entity: binary_sensor.ev_in_charge_window
+            name: In window now
+          - type: divider
+          - entity: number.ev_minimum_soc_for_immediate_charge
+            name: Emergency SoC threshold
+
+      # -- Manual override --------------------------------------------
+      # Acts directly on your plug, bypassing the integration's schedule.
+      # While "Integration enabled" is on, the next evaluation may undo a
+      # manual ON if the schedule says otherwise — turning it OFF by hand
+      # mid-window, though, is respected for the rest of that window.
+      - type: grid
+        title: Manual override
+        columns: 2
+        square: false
+        cards:
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: switch.YOUR_PLUG
+                state: "off"
+            card:
+              type: button
+              name: Start charging
+              icon: mdi:battery-charging-high
+              entity: switch.YOUR_PLUG
+              tap_action:
+                action: perform-action
+                perform_action: switch.turn_on
+                target:
+                  entity_id: switch.YOUR_PLUG
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: switch.YOUR_PLUG
+                state: "on"
+            card:
+              type: button
+              name: Stop charging
+              icon: mdi:battery-off
+              entity: switch.YOUR_PLUG
+              tap_action:
+                action: perform-action
+                perform_action: switch.turn_off
+                target:
+                  entity_id: switch.YOUR_PLUG
+
+      # -- The plug ----------------------------------------------------
+      # Hidden while bypassed, because then none of it describes the
+      # charge actually happening.
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ev_charging_bypassed
+            state: "off"
+        card:
+          type: entities
+          title: 🔌 Plug
+          show_header_toggle: false
+          state_color: true
+          entities:
+            - entity: switch.YOUR_PLUG
+              name: Plug
+            - entity: binary_sensor.ev_plug_delivering_power
+              name: Delivering power
+            - entity: sensor.YOUR_PLUG_power
+              name: Charging power
+            - entity: sensor.YOUR_PLUG_energy
+              name: Total energy delivered
+            - type: divider
+            - entity: sensor.YOUR_PLUG_temperature
+              name: Plug temperature
+            - entity: binary_sensor.ev_plug_overheating
+              name: Overheat warning
+            - entity: switch.ev_overheat_protection
+              name: Overheat protection
+
+      # -- Energy ------------------------------------------------------
+      - type: entities
+        title: 🔋 Energy
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_session_energy
+            name: This session
+          - entity: sensor.ev_monthly_energy
+            name: This month
+          - entity: sensor.ev_lifetime_energy
+            name: Lifetime
+
+      - type: statistics-graph
+        title: Energy per day
+        period: day
+        chart_type: bar
+        days_to_show: 30
+        stat_types:
+          - change
+        entities:
+          - sensor.ev_lifetime_energy
+
+      # -- 12V auxiliary battery -----------------------------------------
+      # Every "don't wake the car" decision in this integration exists to
+      # protect this battery. Only created if your telemetry source
+      # supports it (PSACC does).
+      - type: entities
+        title: 🔋 12V battery
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: sensor.ev_aux_battery
+            name: Reading now
+          - entity: sensor.ev_aux_battery_resting
+            name: Reading at rest
+          - entity: sensor.ev_aux_battery_7d
+            name: 7-day average
+          - entity: sensor.ev_aux_battery_health
+            name: Health
+          - entity: binary_sensor.ev_aux_battery_low
+            name: Trending low
+          - entity: sensor.ev_days_since_charge
+            name: Days since last charge
+
+      # -- Diagnostics -------------------------------------------------
+      # Grouped: feed health / the learned charge rate / plumbing.
+      - type: entities
+        title: 🩺 Diagnostics
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: binary_sensor.ev_soc_stale
+            name: Feed behind schedule
+          - entity: sensor.ev_soc_silence
+            name: Silent for
+          - entity: number.ev_expected_minutes_per_1_soc_report
+            name: Expected minutes per 1%
+          - entity: button.ev_refresh_source
+            name: Request a fresh reading
+          - type: divider
+          - entity: switch.ev_daily_wakeup
+            name: Daily wakeup
+          - entity: time.ev_daily_wakeup_time
+            name: Daily wakeup time
+          - type: divider
+          - entity: sensor.ev_minutes_per_percent
+            name: Learned charge rate
+          - entity: button.ev_reset_rate_learning
+            name: Reset rate learning
+          - type: divider
+          - entity: binary_sensor.ev_source_reachable
+            name: Source reachable
+          - entity: binary_sensor.ev_completion_notified
+            name: Completion announced
+          - entity: number.ev_delivering_power_threshold
+            name: "\"Delivering\" threshold"
