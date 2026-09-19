@@ -300,7 +300,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     if plug_on_edge:
         state = replace(state, plug_turned_on_by=Owner.EXTERNAL, plug_on_since=inp.now)
     if plug_off_edge:
-        # A human switching a plug WE own off (plan 3.3): this must take
+        # A human switching a plug WE own off: this must take
         # effect on the SAME tick's plug decision below, not just be
         # recorded for next time -- otherwise the below-target branch
         # would immediately turn it back on within this very reduce()
