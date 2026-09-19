@@ -1,8 +1,8 @@
-"""soc_stale, bypassed, charging_active, overheating, in_charge_window
-(display only, D10 -- the actual gating uses logic.in_window() at decision
-time, never this entity), source_reachable, completion_notified (the
-public mirror of the YAML's input_boolean.ev_charge_complete_notified --
-see MIGRATION.md)."""
+"""soc_stale, bypassed, charging_active, plug_delivering_power,
+overheating, in_charge_window (display only -- the actual gating calls
+logic.in_window() fresh at decision time, never this entity),
+source_reachable, and completion_notified (the readable face of the
+one-push-per-session latch)."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -124,9 +124,10 @@ class OverheatingBinarySensor(_BaseBinarySensor):
 
 
 class InWindowBinarySensor(_BaseBinarySensor):
-    """DISPLAY ONLY -- mirrors packages/ev_charging.yaml's own warning
-    (D10): the actual gating always calls logic.in_window() fresh at
-    decision time, never reads this entity."""
+    """DISPLAY ONLY. The actual gating always calls logic.in_window()
+    fresh at decision time and never reads this entity: the clock tick and
+    a window-boundary callback are separate code paths that can
+    momentarily disagree about a boundary instant."""
 
     _attr_icon = "mdi:clock-check"
 
@@ -154,10 +155,10 @@ class SourceReachableBinarySensor(_BaseBinarySensor):
 
 
 class CompletionNotifiedBinarySensor(_BaseBinarySensor):
-    """Public mirror of input_boolean.ev_charge_complete_notified, for a
-    ported packages/opel.yaml's opel_charge_complete automation to read
-    directly -- see MIGRATION.md. Read-only; the
-    mark_completion_notified service is how it gets SET externally."""
+    """The readable face of the one-push-per-session completion latch, so
+    an external automation can see whether a notification has already gone
+    out. Read-only; the mark_completion_notified service is how it gets
+    SET from outside."""
 
     _attr_icon = "mdi:check-circle-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC

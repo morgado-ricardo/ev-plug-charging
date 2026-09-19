@@ -1,12 +1,10 @@
 """Three switches:
 
-- `enabled` replaces the "Off (manual)" mode AND all 11 ev_auto_*
-  per-automation control switches (plan section 8) -- one enable switch,
-  not eleven. When off, the coordinator observes and reports but never
-  actuates the plug (logic.reduce() step 2).
-- `overheat_protection` is the one control switch that survives from the
-  YAML basically unchanged (input_boolean.ev_shelly_overheat_protection).
-- `daily_wakeup` is off by default and only created at all when the
+- `enabled` is the master. When off, the coordinator still polls, projects
+  and reports, but never actuates the plug (logic.reduce() step 2).
+  Observation is explicitly what the disabled state still does.
+- `overheat_protection` gates the plug-temperature cutoff.
+- `daily_wakeup` is off by default, and only created at all when the
   configured source can actually be asked for a refresh
   (source.supports_refresh) -- see logic._daily_wakeup_due.
 """

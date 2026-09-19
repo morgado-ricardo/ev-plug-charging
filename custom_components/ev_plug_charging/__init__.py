@@ -1,7 +1,5 @@
-"""EV Plug Charging: schedule-based charging via a switched plug, with SoC
-from a PSA Car Controller (PSACC) instance. See README.md and
-docs/ev-charging-requirements.md (in the source repo this was ported from)
-for the full design record.
+"""EV Plug Charging: schedule-based charging via a switched plug, with
+state of charge from a pluggable telemetry source. See README.md.
 
 Imports of homeassistant.* and of coordinator.py (which itself imports
 homeassistant.*) are deferred into the function bodies below, deliberately:
@@ -10,8 +8,7 @@ ev_plug_charging.<submodule>` -- module-level HA imports here would mean
 `import ev_plug_charging.logic` could never succeed without Home Assistant
 installed, defeating the whole point of logic.py (and models.py, session.py,
 rate_model.py, source.py, store.py) having zero HA imports so they are
-testable with plain pytest. See tests/conftest.py and the port plan section
-2/14.
+testable with plain pytest. See tests/conftest.py.
 """
 from __future__ import annotations
 
@@ -67,9 +64,9 @@ async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> boo
 async def _async_update_listener(hass: "HomeAssistant", entry: "ConfigEntry") -> None:
     """Options changed (poll interval, capacity/power/efficiency, notify
     service, ...) -- reload the entry to pick them up. A capacity change
-    does NOT automatically clear the rate-learning buffer (plan section 5
-    explains why one should: stale samples plus a new seed give a
-    discontinuous cap) -- `button.<name>_reset_rate_learning` does that
+    does NOT automatically clear the rate-learning buffer, although stale
+    samples plus a new seed do give a discontinuous cap --
+    `button.<name>_reset_rate_learning` does that
     explicitly, since telling a genuine capacity correction (same car,
     better number) apart from a different car isn't possible from the
     config diff alone."""
@@ -77,11 +74,7 @@ async def _async_update_listener(hass: "HomeAssistant", entry: "ConfigEntry") ->
 
 
 async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
-    """Replaces the YAML's two one-off migration automations
-    (ev_migrate_charge_efficiency, ev_migrate_soc_step_minutes,
-    packages/ev_charging.yaml:1097-1165) with an ordinary config-entry
-    version bump -- exactly the "roughly a third of the file exists only
-    because the host is YAML" saving the design record predicted.
+    """Brings older config entries forward.
 
     v1 -> v2: `source_type` did not exist, because PSACC was the only
     thing this could talk to and was hardcoded. Every v1 entry is

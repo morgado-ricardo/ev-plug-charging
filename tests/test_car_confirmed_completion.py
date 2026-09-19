@@ -3,10 +3,9 @@ and its sticky companion, SessionState.last_charge_source.
 
 This is the ONE completion signal that works no matter how the car was
 charged -- plug, EVSE straight into the wall (a bypass session), or a
-public charger this integration never sees. Ported from
-opel_charge_complete (packages/opel.yaml:913-950); see AGENTS.md and
-docs/ev-charging-requirements.md (in the source repo) for why every
-completion path shares one dedup latch (complete_notified).
+public charger this integration never sees. All four completion paths
+share one dedup latch (complete_notified), so whichever wins the race, the
+user gets exactly one notification.
 """
 from __future__ import annotations
 

@@ -1,26 +1,25 @@
 """Four services:
 
-- mark_completion_notified: lets an external automation (e.g. a ported
-  packages/opel.yaml's opel_charge_complete, which reads
-  input_boolean.ev_charge_complete_notified directly today) claim the
-  one-push-per-session latch the same way the car-confirmed "Finished"
-  status does. See MIGRATION.md.
-- refresh_source: manual equivalent of the one rescue wakeup (D5), for a
-  human who wants a fresh reading right now rather than waiting for the
-  automatic 2x-gap trigger.
-- reset_rate_learning: clears the rate-model sample buffer (plan section 5)
-  -- use after a capacity/car change, since stale samples plus a new seed
-  give a discontinuous cap.
+- mark_completion_notified: lets an external automation claim the
+  one-push-per-session latch, the same way the car-confirmed "Finished"
+  status does, so it can own the notification without this integration
+  also sending one.
+- refresh_source: manual equivalent of the one rescue wakeup, for a human
+  who wants a fresh reading now rather than waiting for the automatic
+  2x-gap trigger.
+- reset_rate_learning: clears the rate-model sample buffer. Use after a
+  capacity or vehicle change, since stale samples plus a new seed give a
+  discontinuous cap.
 - vehicle_command: the abstract vehicle-command API (sources/base.py's
   TelemetrySource.supported_commands / async_vehicle_command). One
   service, not nine, because the vocabulary (const.VEHICLE_COMMANDS) is
-  open-ended and services.yaml selectors are static. Deliberately no
-  entity, no options toggle and no arm gate here -- a service is invisible
-  until something calls it, which is why this doesn't make the
-  integration feel like anything other than a charging scheduler; see
-  MIGRATION.md for the intended use (retiring packages/opel.yaml's
-  rest_command: block in favour of this, once the transport -- host, VIN,
-  timeout, error handling -- has exactly one owner instead of two).
+  open-ended and services.yaml selectors are static.
+
+  Deliberately no entity, no options toggle and no arm gate: a service is
+  invisible until something calls it, which is what keeps this from making
+  the integration feel like anything other than a charging scheduler. It
+  exists because the transport (host, VIN, timeout, error handling) is
+  already owned here, and re-declaring it elsewhere means owning it twice.
 """
 from __future__ import annotations
 
@@ -59,8 +58,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def _mark_completion_notified(call: ServiceCall) -> None:
         coordinator = _get_coordinator(hass, call)
         coordinator._session_state = replace(  # noqa: SLF001 -- the one
-            # legitimate external mutation point; this mirrors what
-            # opel_charge_complete does to input_boolean.ev_charge_complete_notified.
+            # legitimate external mutation point: an automation claiming
+            # the completion latch so it, not this integration, sends the
+            # notification.
             coordinator._session_state, complete_notified=True
         )
 

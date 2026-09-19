@@ -5,7 +5,7 @@ the same advanced fields plus notifications.
 Runtime-tunable settings (target SoC, min-SoC override, expected gap,
 window times, mode) are deliberately NOT here -- they are entities (select,
 number, time), because they belong on a dashboard, not behind a reconfigure
-flow. See plan section 8.
+flow.
 """
 from __future__ import annotations
 

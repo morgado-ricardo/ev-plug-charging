@@ -2,9 +2,8 @@
 a Home Assistant restart.
 
 This exists as one place, not `RestoreEntity` scattered across nine platform
-files, so the state that R5/R6/R8/R11 depend on (see the port plan section
-7's "what breaks if this is lost" table) is durable and migratable as a
-single unit. The coordinator wraps `to_dict`/`from_dict` with
+files, so the state that R5/R6/R8/R11 depend on is durable and migratable
+as a single unit. The coordinator wraps `to_dict`/`from_dict` with
 `homeassistant.helpers.storage.Store`; this module itself has zero HA
 imports and is unit-tested as plain JSON round-tripping.
 """
@@ -81,8 +80,7 @@ def from_dict(data: dict[str, Any] | None) -> SessionState:
     """A plain dict (as produced by to_dict, or missing/corrupt) ->
     SessionState. Unknown or missing fields fall back to SessionState's own
     defaults, which are all chosen to be the fail-closed / safe-restart
-    value (plan section 7's "*_since" note: losing a debounce timestamp
-    only restarts that clock)."""
+    value -- losing a debounce timestamp only restarts that clock."""
     if not data:
         return SessionState()
 

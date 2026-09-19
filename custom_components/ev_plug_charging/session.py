@@ -1,10 +1,9 @@
 """Session-anchor bookkeeping: new-session detection, the matched-pair
 anchor capture, and its one-time backwards correction.
 
-Split out from logic.py because this is the single largest omission a first
-pass at porting the YAML tends to make: R8 and R11 both hinge entirely on
-it, and D2's session-cap term is meaningless without it. See plan section
-3.1 and docs/ev-charging-requirements.md D3, D4, D9.
+Split out from logic.py because getting the anchor wrong silently corrupts
+everything downstream of it: R8 and R11 both hinge entirely on this file,
+and the session-cap projection term is meaningless without it.
 
 Zero Home Assistant imports, same as logic.py -- this is unit-tested on its
 own in tests/test_session.py.
@@ -30,14 +29,14 @@ def advance_session(
     """Run new-session detection and anchor capture/correction. Must run
     before the plug decision on every reduce() call.
     """
-    # -- new-session detection (D9's mode:single race no longer exists: this
-    # is level-based, so "did either signal edge this tick" is just two
-    # booleans, not a coin toss between simultaneous triggers) --
+    # -- new-session detection. Level-based, so "did either signal edge
+    # this tick" is two booleans rather than a race between two
+    # simultaneous triggers. --
     if plug_on_edge or charging_active_edge:
-        # Ported in spirit from packages/ev_charging.yaml:1400-1401: a
-        # plug-on always starts a new session; a charging-active edge only
-        # does if the PREVIOUS session already finished (complete_notified).
-        # This is exactly what stops an ev_charging_active flicker (R11)
+        # A plug-on always starts a new session; a charging-active edge
+        # only does if the PREVIOUS session already finished
+        # (complete_notified).
+        # This is exactly what stops a mid-session flicker (R11)
         # from wiping the night's kWh and re-arming a second completion
         # push -- charging_active going off and back on with the plug still
         # on is NOT plug_on_edge, and complete_notified is still False from
@@ -46,13 +45,14 @@ def advance_session(
         if new_session:
             state = replace(state, session_energy_kwh=0.0, complete_notified=False)
 
-    # -- anchor capture (D3, D4): only on the instant current actually
-    # starts flowing, never on plug-on. The SoC half is deliberately the
-    # RAW age of the reading (D3's warning against "fixing" this to use the
-    # silence clock, which reads zero by construction the moment charging
-    # starts and would answer "fresh" every time). --
+    # -- anchor capture: only on the instant current actually starts
+    # flowing, never on plug-on -- a cable can sit connected for an hour
+    # first. The staleness half deliberately uses the RAW age of the
+    # reading, NOT the silence clock: the silence clock reads zero by
+    # construction the moment charging starts, so it would answer "fresh"
+    # every single time and the provisional path would never fire. --
     if charging_active_edge:
-        anchor_soc = inp.soc if inp.soc is not None else 100.0  # D8 fail-closed default
+        anchor_soc = inp.soc if inp.soc is not None else 100.0  # fail closed
         anchor_stale = (
             inp.soc is None
             or inp.soc_changed_at is None
@@ -68,7 +68,7 @@ def advance_session(
             soc_stale_notified=False,
         )
 
-    # -- anchor correction (D4): exactly once per session, on the first
+    # -- anchor correction: exactly once per session, on the first
     # fresh reading AFTER a provisional capture. Moves the VALUE, never the
     # CLOCK, so the session cap still bounds the same real-world duration.
     #

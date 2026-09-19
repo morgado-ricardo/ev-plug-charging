@@ -1,8 +1,10 @@
 """Runtime-tunable numbers: target SoC, emergency min-SoC, expected
-reporting gap, and the "delivering power" threshold -- the last one was a
-hard-coded 50 W in the YAML (a function of EVSE current, not a universal
-constant); making it a number entity is a deliberate improvement flagged
-in the port plan section 8."""
+reporting gap, and the "delivering power" threshold.
+
+All four are entities rather than config options because they are things
+you change from a dashboard, not once at setup. The power threshold in
+particular is a function of your EVSE's current draw, not a universal
+constant, so it cannot sensibly be hard-coded."""
 from __future__ import annotations
 
 from dataclasses import dataclass

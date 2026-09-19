@@ -1,7 +1,7 @@
-"""Read-only sensors. `projected_soc` is the one that is also a control
-INPUT (logic.reduce() reads it back via the persisted rate/anchor, not
-this entity -- this is display, matching sensor.ev_projected_soc's own
-role in the YAML)."""
+"""Read-only sensors. `projected_soc` is the interesting one: it shows the
+number the stop is actually gated on. logic.reduce() recomputes that value
+from the persisted rate and anchor every tick -- it never reads this entity
+back, so nothing here can influence a decision."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -83,11 +83,10 @@ class SocSensor(_BaseSensor):
 
 
 class ProjectedSocSensor(_BaseSensor):
-    """The one sensor here that is ALSO a control input, upstream: this
-    entity displays what logic.reduce() just computed, but the next
-    reduce() call recomputes it fresh from persisted state -- it does not
-    read this entity back (sensor.ev_projected_soc's own role, plan
-    section 9)."""
+    """Displays what logic.reduce() just computed. The next reduce() call
+    recomputes it fresh from persisted state and does NOT read this entity
+    back -- a decision must never depend on a display entity's cached
+    value."""
 
     _attr_icon = "mdi:battery-clock-outline"
     _attr_native_unit_of_measurement = "%"
@@ -204,10 +203,10 @@ class ChargeSourceSensor(_BaseSensor):
 class LastChargeSourceSensor(_BaseSensor):
     """The sticky companion to ChargeSourceSensor: how the session that
     just ended was actually powered, still correct once the live value has
-    fallen back to "none". Ported from sensor.ev_last_charge_source
-    (packages/opel.yaml:938-941) -- needed because a car-confirmed
-    completion (source.py/logic.reduce()'s car_finished_edge) can arrive
-    well after the live charge_source has already gone quiet."""
+    fallen back to "none". Needed because a car-confirmed completion
+    (logic.reduce()'s car_finished_edge) can arrive well after the live
+    charge_source has already gone quiet, and a notification that says
+    "charged via none" is useless."""
 
     _attr_icon = "mdi:history"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -265,10 +264,9 @@ class TotalEnergySensor(_BaseSensor):
 
 
 class DaysSinceChargeSensor(_BaseSensor):
-    """Free -- the integration already knows when its own sessions end
+    """Free: the integration already knows when its own sessions end
     (SessionState.charge_completed_at, set at logic._mark_complete's one
-    choke point). Ported from sensor.opel_days_since_charge
-    (packages/opel.yaml:205-211)."""
+    choke point)."""
 
     _attr_icon = "mdi:ev-station"
     _attr_native_unit_of_measurement = "d"
@@ -319,8 +317,8 @@ class AuxBatterySensor(_BaseAuxBatterySensor):
 class AuxBatteryRestingSensor(_BaseAuxBatterySensor):
     """Only a value while the car is at rest -- charging and driving both
     inflate the raw reading, so the recorder should only see comparable
-    samples (packages/opel.yaml:469-481's own reason for gating its
-    resting sensor the same way)."""
+    samples. A history graph mixing resting and charging readings tells
+    you nothing about the battery's actual condition."""
 
     _attr_icon = "mdi:car-battery"
     _attr_native_unit_of_measurement = "%"
@@ -364,12 +362,11 @@ class AuxBattery7dSensor(_BaseAuxBatterySensor):
 
 class AuxBatteryHealthSensor(_BaseAuxBatterySensor):
     """healthy / watch / low / unknown. The 7d-vs-30d drift lives here as
-    an attribute rather than its own entity -- see aux_battery.py's module
-    docstring for why: it's the single most informative figure in the
-    YAML's original seven-sensor set ("nightly charging is slowly losing
-    ground even though the level still looks fine"), but it doesn't need
-    top-level visibility to be useful, and the same 30-day sample buffer
-    already has to exist for the health band itself."""
+    an attribute rather than its own entity: it is the most informative
+    figure this tracker produces ("nightly charging is slowly losing
+    ground even though the level still looks fine"), but it does not need
+    top-level visibility to be useful, and the 30-day sample buffer it
+    needs already exists for the health band itself."""
 
     _attr_icon = "mdi:car-battery"
 

@@ -7,11 +7,12 @@ inventing its own clock, because that clock is the subtlest and highest-risk
 piece of the whole integration and must behave identically no matter where
 the reading came from.
 
-Home Assistant's `last_changed` on the old template sensors moved only when
-the RENDERED VALUE changed, not on every poll -- so a 120s REST poll
-re-delivering an identical cached SoC correctly counted as stale
-(packages/ev_charging.yaml:878-882 said so explicitly, and D3/D4 both
-depend on it). `derive_freshness` reproduces that on purpose:
+The rule it implements: **a re-delivered identical value is not fresh.**
+A 120s poll that hands back the same cached number it handed back two
+minutes ago has learned nothing, and treating that as a fresh reading
+would make a feed that went silent hours ago look perfectly healthy.
+
+So:
 
   1. If the source supplies a timestamp for the reading itself, prefer it
      unconditionally -- it makes the clock restart-safe for free, because it
@@ -107,9 +108,8 @@ def restored_snapshot(
 
 def unreachable_snapshot(now: datetime, prev: Optional[TelemetrySnapshot]) -> TelemetrySnapshot:
     """A failed fetch. SoC and its freshness clock are carried forward
-    unchanged -- a network hiccup must not itself manufacture staleness, only
-    source_reachable=False does (that is what FR-S4 tests, via
-    logic.is_trustworthy_soc)."""
+    unchanged -- a network hiccup must not itself manufacture staleness.
+    Only source_reachable=False does, via logic.is_trustworthy_soc."""
     return TelemetrySnapshot(
         soc=prev.soc if prev else None,
         soc_changed_at=prev.soc_changed_at if prev else None,

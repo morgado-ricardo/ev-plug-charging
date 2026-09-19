@@ -40,8 +40,8 @@ installed)" explicitly.
 
 ## R1–R14 is the acceptance gate, not an ordinary regression suite
 
-`tests/test_scenarios.py` reproduces fourteen scenarios from the upstream
-design record, each one a real incident that happened once in production.
+`tests/test_scenarios.py` holds fourteen scenarios, each one a real failure
+that happened once on a real car.
 Any change to `logic.py`, `session.py`, or `rate_model.py` must leave every
 one of R1–R14 passing. **Never edit a scenario to make a change pass** — a
 scenario failing after a change means the change regressed real behaviour;

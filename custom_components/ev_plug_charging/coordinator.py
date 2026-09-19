@@ -4,8 +4,11 @@ Owns the telemetry-source poll, the plug-entity listeners, the ~30s
 projection timer, the exact window open/close callbacks, persistence via
 store.py, and actuation. Every tick funnels through the same path: build
 Inputs from the current world -> logic.reduce() -> persist the new
-SessionState -> act on the Decision. See the port plan sections 3 and 6 for
-why this is a single funnel rather than the YAML's 17 separate automations.
+SessionState -> act on the Decision.
+
+One funnel, deliberately. Independent rules that each watch the world and
+act on it cannot be reasoned about together, and they race: two of them can
+observe the same tick and disagree about what to do with one plug.
 
 It never knows WHICH telemetry source it has: `sources.async_create_source()`
 hands it a `TelemetrySource`, and from then on it only asks for a normalised
@@ -65,9 +68,8 @@ class RuntimeSettings:
     slug, not from unique_id, so that lookup would be fragile. Each
     platform entity is a RestoreEntity that pushes its value here (and
     requests a re-evaluation) on every change, and restores it from HA's
-    own state restoration on add -- the same "no `initial:`, restore
-    across restart" behaviour packages/ev_charging.yaml's helpers have,
-    achieved the HA-native way instead of input_boolean's restore quirk.
+    own state restoration on add, so a setting you changed months ago
+    survives a restart.
     """
 
     mode: ChargeMode = ChargeMode.SMART
@@ -117,9 +119,9 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_decision: Optional[logic_mod.Decision] = None
         self.last_aux_battery: Optional[aux_battery.AuxBatteryReading] = None
         # Energy tracking (session/monthly/lifetime kWh) is intentionally
-        # coordinator-side, not part of SessionState/logic.reduce(): FR-E3
-        # ("no metering value may gate a control decision") means it can be
-        # simpler than the safety-critical state store.py persists. A
+        # coordinator-side, not part of SessionState/logic.reduce(): no
+        # metering value may gate a control decision, so it can be simpler
+        # than the safety-critical state store.py persists. A
         # restart mid-session loses this baseline and the session figure
         # restarts from the plug's raw current reading -- cosmetic, not a
         # safety issue, unlike losing charge_started_at or the anchor.
@@ -133,15 +135,15 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def source(self) -> Optional[TelemetrySource]:
         """The configured telemetry source. Public because the refresh
         button and the refresh_source service both legitimately need it --
-        they are the manual equivalents of D5's automatic rescue refresh."""
+        they are the manual equivalents of the automatic rescue refresh."""
         return self._source
 
     def request_settings_update(self, **changes: Any) -> None:
         """Called by a settings entity (select/switch/number/time) when the
         user changes it. Updates the coordinator's live settings and
         triggers a re-evaluation on the same tick, rather than waiting for
-        the next poll -- matching the YAML's immediate reaction to e.g.
-        flipping ev_charge_mode."""
+        the next poll: flipping the charge mode should take effect now,
+        not in two minutes."""
         rearm_window = "window_start" in changes or "window_end" in changes
         for key, value in changes.items():
             setattr(self.settings, key, value)
@@ -398,9 +400,9 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _track_energy(self, prev_state, new_state):
         """Session/monthly/lifetime kWh from the plug's raw cumulative
-        energy sensor. Metering only (FR-E3) -- see the note on
-        _energy_baseline_kwh in __init__ for why this lives outside
-        SessionState/logic.reduce()."""
+        energy sensor. Metering only, never an input to a decision -- see
+        the note on _energy_baseline_kwh in __init__ for why this lives
+        outside SessionState/logic.reduce()."""
         from dataclasses import replace as _replace
 
         entity_id = self.entry.data.get(CONF_PLUG_ENERGY_SENSOR) or self.entry.options.get(
@@ -413,19 +415,17 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return new_state
 
         # logic.reduce() (via session.advance_session) already decided
-        # WHETHER this tick starts a new session -- that is the new_session
-        # test ported from packages/ev_charging.yaml:1400-1401, and it is
+        # WHETHER this tick starts a new session, and that decision is
         # encoded as session_energy_kwh being reset to 0.0 in the state
         # `logic_mod.reduce()` just returned (before this method's own
         # _replace() below overwrites it with the real computed value).
         # Re-deriving "is this a new session?" independently here, e.g.
         # from charge_started_at changing, would drift from that decision
-        # -- charge_started_at moves on every charging_active edge (D3),
-        # not only on new sessions (R11's flicker moves neither). So: reset
-        # the baseline exactly when logic just zeroed the field, mirroring
-        # utility_meter.reset (packages/ev_charging.yaml:1437-1439), which
-        # is what makes an overnight session spanning midnight count as one
-        # (FR-E2) and a flicker (R11) NOT reset it.
+        # -- charge_started_at moves on every charging_active edge, not
+        # only on new sessions (R11's mid-session flicker moves neither).
+        # So: reset the baseline exactly when logic just zeroed the field.
+        # That is what makes an overnight session spanning midnight count
+        # as one, and a flicker (R11) not reset it.
         just_reset = new_state.session_energy_kwh == 0.0 and (
             self._energy_baseline_kwh is None or prev_state.session_energy_kwh != 0.0
         )

@@ -27,7 +27,8 @@ class PlugAction(str, Enum):
 
 
 class ChargeSource(str, Enum):
-    """sensor.ev_charge_source (packages/ev_charging.yaml:751), D7."""
+    """How the current charge is being powered. `bypass` means the car is
+    charging but not through our plug, so we cannot stop it."""
 
     PLUG = "plug"
     BYPASS = "bypass"
@@ -36,7 +37,9 @@ class ChargeSource(str, Enum):
 
 
 class Owner(str, Enum):
-    """Who turned the plug on -- plan section 3.3."""
+    """Who turned the plug on. UNKNOWN after a restart, which is why a
+    restart with the plug already on has to be reconciled rather than
+    trusted."""
 
     US = "us"
     EXTERNAL = "external"
@@ -46,7 +49,7 @@ class Owner(str, Enum):
 @dataclass(frozen=True)
 class RateSnapshot:
     """The rate model's output: already max(learned, seed) -- see
-    rate_model.py. logic.py applies the D2 1.15x session-cap margin on top
+    rate_model.py. logic.py applies the 1.15x session-cap margin on top
     of this value, so both projection terms start from the same rate and
     learning can only ever push the cap later, never earlier."""
 
@@ -55,7 +58,9 @@ class RateSnapshot:
 
 @dataclass(frozen=True)
 class SessionAnchor:
-    """The session-cap anchor: SoC + timestamp as a matched pair (D4)."""
+    """The session-cap anchor: SoC + timestamp as a MATCHED pair. Reading
+    one without the other is how a projection ends up extrapolating a
+    known value from the wrong moment."""
 
     soc: Optional[float] = None
     captured_at: Optional[datetime] = None
@@ -67,8 +72,7 @@ class SessionAnchor:
 class SessionState:
     """Everything persisted across coordinator ticks and HA restarts.
 
-    Every field here has a "what breaks if this is lost" entry in the port
-    plan (section 7). Losing the `*_since` debounce timestamps merely
+    Losing the `*_since` debounce timestamps merely
     restarts each clock -- the safe direction for all of them -- so on
     restore those default to None without a special code path.
     """
@@ -79,14 +83,14 @@ class SessionState:
     charge_started_at: Optional[datetime] = None
     session_energy_kwh: float = 0.0
 
-    # -- plug ownership (plan section 3.3) --
+    # -- plug ownership --
     plug_turned_on_by: Owner = Owner.UNKNOWN
     manual_off_until: Optional[datetime] = None
 
-    # -- once-per-window "charge not started" latch (plan section 3.2) --
+    # -- once-per-window "charge not started" latch --
     not_started_pushed_for: Optional[str] = None
 
-    # -- rescue wakeup, D5's one-shot-per-session latch --
+    # -- rescue wakeup: the one-shot-per-session latch --
     rescue_wakeup_used: bool = False
 
     # -- overheat cutoff latch --
@@ -138,7 +142,7 @@ class SessionState:
     aux_battery_critical_notified: bool = False
 
     # -- previous-tick raw values, purely for edge detection in a pure
-    # reducer (plan section 3: "reduce(prev, inputs)", not stateless).
+    # reducer -- reduce(prev, inputs), not stateless.
     # `prev_soc` + `prev_soc_changed_at` do double duty: persisted through
     # store.py, they are also what the coordinator seeds source.py's
     # `prev` TelemetrySnapshot with on the FIRST poll after a restart --
@@ -163,8 +167,7 @@ class SessionState:
     # how the session that just ended was actually powered, because the
     # live value has already fallen back to NONE by the time a car-
     # confirmed completion (which can arrive well after charging_active
-    # drops) fires. Ported from sensor.ev_last_charge_source
-    # (packages/opel.yaml:938-941). --
+    # drops) fires. --
     last_charge_source: ChargeSource = ChargeSource.NONE
 
     # -- fields the rate model needs to recognise a completed, acceptable

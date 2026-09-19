@@ -1,6 +1,6 @@
-"""Base entity: device_info + has_entity_name, so entity names come from
-`unique_id` and the device, not a hard-coded `default_entity_id` the way
-every sensor in packages/ev_charging.yaml needed (plan section 6.2)."""
+"""Base entity: device_info + has_entity_name, so every entity ID derives
+from the device name and the entity's own name rather than being spelled
+out one at a time. Renaming the device renames all of them together."""
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry

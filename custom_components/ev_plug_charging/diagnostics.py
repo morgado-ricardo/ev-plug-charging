@@ -1,11 +1,10 @@
-"""Full anchor/projection/rate-model state dump.
+"""Full anchor/projection/rate-model state dump, plus the last decision's
+`reason`.
 
-docs/ev-charging-requirements.md section 6.5 asks for exactly this: "a
-diagnostics dump of the full anchor/projection state -- this is exactly the
-data needed to debug the failures in section 4, and today it takes a
-template editor to see it." This is that dump, plus the last decision's
-`reason` -- the replacement for the automation traces the port loses (see
-the port plan's risk section).
+This is the one place that shows WHY the integration did what it did. Every
+failure worth debugging here -- a charge that stopped early, one that never
+started, a projection that drifted -- is a question about the anchor and the
+rate model, and neither is visible from the entity states alone.
 """
 from __future__ import annotations
 

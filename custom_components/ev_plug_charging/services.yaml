@@ -3,7 +3,7 @@ mark_completion_notified:
   description: >-
     Claims the one-push-per-session completion latch, the way a car-confirmed
     "Finished" status does. For an external automation that detects
-    completion by its own means (see MIGRATION.md).
+    completion by its own means and wants to own the notification.
   fields:
     config_entry_id:
       name: Config entry
@@ -16,7 +16,7 @@ refresh_source:
   name: Refresh source
   description: >-
     Manually requests a fresh reading from the configured telemetry source
-    (the equivalent of the one automatic rescue wakeup, D5, but on demand).
+    -- the equivalent of the automatic rescue wakeup, but on demand.
   fields:
     config_entry_id:
       name: Config entry
