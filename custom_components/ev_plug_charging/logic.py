@@ -39,6 +39,7 @@ from .const import (
     EVENT_WINDOW_SHORTFALL,
     EVSE_NO_POWER_DWELL_SECONDS,
     OVERHEAT_HYSTERESIS_C,
+    OWN_OFF_OBSERVATION_GRACE_SECONDS,
     POWER_DROP_COMPLETE_DWELL_SECONDS,
     RESCUE_WAKEUP_GAP_MULTIPLE,
     SESSION_CAP_MARGIN,
@@ -298,7 +299,12 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     )
 
     if plug_on_edge:
-        state = replace(state, plug_turned_on_by=Owner.EXTERNAL, plug_on_since=inp.now)
+        state = replace(
+            state,
+            plug_turned_on_by=Owner.EXTERNAL,
+            plug_on_since=inp.now,
+            own_off_commanded_at=None,
+        )
     if plug_off_edge:
         # A human switching a plug WE own off: this must take
         # effect on the SAME tick's plug decision below, not just be
@@ -313,8 +319,18 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         # swallows that window whole, so the evening's charge silently
         # never starts. Turning the plug off at 20:00 says nothing about
         # whether you want it charging at 23:00.
+        #
+        # And only when a HUMAN did it. The plug's observed state lags our
+        # own command by a tick, so our every stop -- an overheat cutoff,
+        # most of all -- used to come back around and look like someone
+        # overriding us, suppressing the resume we would otherwise make
+        # once the plug cooled.
+        own_off = state.own_off_commanded_at is not None and (
+            inp.now - state.own_off_commanded_at
+        ) <= timedelta(seconds=OWN_OFF_OBSERVATION_GRACE_SECONDS)
+
         manual_off_until = state.manual_off_until
-        if prev_owner == Owner.US and in_window(
+        if not own_off and prev_owner == Owner.US and in_window(
             inp.now,
             inp.window_start,
             inp.window_end,
@@ -335,6 +351,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug_on_since=None,
             evse_no_power_notified=False,
             manual_off_until=manual_off_until,
+            own_off_commanded_at=None,  # consumed
         )
 
     # ---- health signals (computed regardless of branch) ----
@@ -510,7 +527,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         if not state.overheat_latched:
             events.append(Event(EVENT_OVERHEAT_CUTOFF, {"temp_c": inp.plug_temp_c}))
         state = replace(state, overheat_latched=True)
-        return _finalize(state, inp, charging_active, car_charging), Decision(
+        return _finalize(state, inp, charging_active, car_charging, PlugAction.OFF), Decision(
             plug=PlugAction.OFF,
             force_disable=True,
             events=tuple(events),
@@ -530,7 +547,9 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
 
     # ---- 2. not enabled: observe only, never actuate ----
     if not inp.enabled:
-        return _finalize(state, inp, charging_active, car_charging), Decision(
+        return _finalize(
+            state, inp, charging_active, car_charging, PlugAction.UNCHANGED
+        ), Decision(
             plug=PlugAction.UNCHANGED,
             force_disable=False,
             events=tuple(events),
@@ -553,7 +572,9 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         and not inp.plug_switch_on
     ):
         state = replace(state, plug_turned_on_by=Owner.US)
-        return _finalize(state, inp, charging_active, car_charging), Decision(
+        return _finalize(
+            state, inp, charging_active, car_charging, PlugAction.ON
+        ), Decision(
             plug=PlugAction.ON,
             force_disable=False,
             events=tuple(events) + (Event("emergency_low_soc", {"soc": inp.soc}),),
@@ -571,6 +592,29 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         inp.now, inp.window_start, inp.window_end, inp.window_open_edge, inp.window_close_edge
     )
     manual_off_active = state.manual_off_until is not None and inp.now < state.manual_off_until
+
+    # Did THIS window occurrence already complete?
+    #
+    # Stopping at target is not self-sustaining: projected_soc collapses
+    # back to the last real reading the moment charging_active goes false
+    # (see projected_soc's early return), and that reading is hours old by
+    # construction -- it still says 69 when we just stopped at a projected
+    # 80. So the below-target branch would turn the plug straight back on,
+    # stop again, and oscillate every tick until a fresh reading landed.
+    #
+    # Until now the only thing preventing that was our own stop being
+    # misread as a human override -- accidental, and it took the overheat
+    # resume down with it. This is the same guard stated on purpose, and it
+    # is derived from persisted state (charge_completed_at) rather than a
+    # latch, so it survives a restart and expires on its own when the next
+    # window occurrence opens. A genuinely new window, or a new session,
+    # charges normally.
+    completed_this_window = (
+        state.complete_notified
+        and state.charge_completed_at is not None
+        and window_instance_id(state.charge_completed_at, inp.window_start, inp.window_end)
+        == window_instance_id(inp.now, inp.window_start, inp.window_end)
+    )
 
     # ---- 4. in window ----
     if window_open:
@@ -636,6 +680,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             and inp.soc is not None
             and inp.soc < inp.target_soc
             and not manual_off_active
+            and not completed_this_window
         ):
             plug = PlugAction.ON
             state = replace(state, plug_turned_on_by=Owner.US)
@@ -685,7 +730,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug = PlugAction.UNCHANGED
             reason = "outside_window_not_ours"
 
-    return _finalize(state, inp, charging_active, car_charging), Decision(
+    return _finalize(state, inp, charging_active, car_charging, plug), Decision(
         plug=plug,
         force_disable=False,
         events=tuple(events),
@@ -701,11 +746,23 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
 
 
 def _finalize(
-    state: SessionState, inp: Inputs, charging_active: bool, car_charging: bool
+    state: SessionState,
+    inp: Inputs,
+    charging_active: bool,
+    car_charging: bool,
+    plug: PlugAction = PlugAction.UNCHANGED,
 ) -> SessionState:
-    """Record this tick's raw values for next call's edge detection."""
+    """Record this tick's raw values for next call's edge detection.
+
+    That includes `plug`: the plug's observed state lags the command by a
+    tick, so without recording that WE asked for the off, the next tick
+    sees an off on a plug we owned and cannot tell it from a human's.
+    """
     return replace(
         state,
+        own_off_commanded_at=(
+            inp.now if plug is PlugAction.OFF else state.own_off_commanded_at
+        ),
         prev_plug_switch_on=inp.plug_switch_on,
         prev_charging_active=charging_active,
         prev_car_charging=car_charging,

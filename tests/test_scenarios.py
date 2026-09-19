@@ -436,7 +436,7 @@ def test_r9_overheat_cuts_charge_and_forces_disable():
 
 
 def test_r9_overheat_never_acts_on_idle_plug():
-    """FR-X2: never act on plug temperature when the plug is not carrying
+    """Never act on plug temperature when the plug is not carrying
     current -- an idle plug in a warm cupboard must not interrupt a
     bypass charge running direct from the wall."""
     state = SessionState()
@@ -596,7 +596,7 @@ def test_r14_window_close_shortfall_push_in_smart_mode():
 
 
 def test_r14_window_close_notifies_in_timed_mode_too():
-    """FR-N3: a charge the window cuts short must notify in EVERY mode."""
+    """A charge the window cuts short must notify in EVERY mode."""
     state = SessionState(charge_started_at=dt(23, 0))
     inp = base_inputs().set(
         now=dt(7, 0, day=DAY + timedelta(days=1)),

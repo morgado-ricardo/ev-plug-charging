@@ -286,6 +286,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session_state = new_state
         self.last_decision = decision
         self.last_aux_battery = aux_reading
+        self._log_decision(now, inputs, new_state, decision, window_open_edge, window_close_edge)
 
         await self._act_on_decision(prev_state, new_state, decision, inputs, aux_events)
         await self._store.async_save(store_mod.to_dict(new_state))
@@ -296,6 +297,77 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "state": new_state,
             "aux_battery": aux_reading,
         }
+
+    def _log_decision(
+        self,
+        now: datetime,
+        inputs: Inputs,
+        state,
+        decision: logic_mod.Decision,
+        window_open_edge: bool,
+        window_close_edge: bool,
+    ) -> None:
+        """One line per tick saying what was decided and what decided it.
+
+        This integration has no automations, so it leaves no traces: when a
+        charge does not start there is nothing to open and step through.
+        `decision_reason` on sensor.*_projected_soc shows the latest answer
+        but keeps no history, and the two things most likely to be
+        suppressing a start -- `manual_off_until` and a window that is not
+        open when the wall clock says it should be -- are not entities at
+        all and were only visible in a diagnostics download.
+
+        So: everything needed to answer "why didn't it charge?" on one line,
+        at DEBUG. Actuations also go out at INFO, because a charge starting
+        or stopping is worth a line in anyone's log without opting in.
+        """
+        if decision.plug is not PlugAction.UNCHANGED:
+            _LOGGER.info(
+                "Plug %s (%s): soc=%s projected=%s target=%s",
+                "ON" if decision.plug is PlugAction.ON else "OFF",
+                decision.reason,
+                inputs.soc,
+                decision.projected_soc,
+                inputs.target_soc,
+            )
+
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+
+        _LOGGER.debug(
+            "tick %s | %s -> plug %s | soc=%s proj=%s target=%s | "
+            "window %s-%s in=%s%s | enabled=%s mode=%s plug_on=%s power=%sW | "
+            "silence=%.0fmin stale=%s source=%s | manual_off_until=%s",
+            now.isoformat(timespec="seconds"),
+            decision.reason,
+            decision.plug.value,
+            inputs.soc,
+            decision.projected_soc,
+            inputs.target_soc,
+            inputs.window_start,
+            inputs.window_end,
+            # Recomputed with the same call the decision used, edges and
+            # all -- a log line that disagrees with the decision it is
+            # describing is worse than no log line.
+            logic_mod.in_window(
+                now,
+                inputs.window_start,
+                inputs.window_end,
+                window_open_edge,
+                window_close_edge,
+            ),
+            " (open edge)" if window_open_edge else (" (close edge)" if window_close_edge else ""),
+            inputs.enabled,
+            inputs.mode.value,
+            inputs.plug_switch_on,
+            inputs.plug_power_w,
+            decision.silence_minutes,
+            decision.soc_stale,
+            decision.charge_source.value,
+            state.manual_off_until.isoformat(timespec="seconds")
+            if state.manual_off_until
+            else None,
+        )
 
     def _build_inputs(
         self, now: datetime, window_open_edge: bool, window_close_edge: bool
