@@ -1,0 +1,43 @@
+# AI code review via Google's Gemini API — a free, self-hosted replacement
+# for the (sunset) Gemini Code Assist review bot.
+#
+# The mechanics live in one shared place:
+#   morgado-ricardo/ci-shared → .github/workflows/gemini-review.yml
+# That is where the model, the fallback model and the retry behaviour are
+# configured, for every repository at once. This file only says *when* to
+# review — triggers have to stay with the caller.
+#
+# What stays repo-local:
+#   - .github/gemini-review.yml — review instructions and ignore globs.
+#   - the GEMINI_API_KEY secret (Settings → Secrets and variables → Actions);
+#     secrets never cross repositories, so this one has to be added here
+#     even though the same key is already set on other repos.
+#
+# Re-run on demand by commenting `/gemini-review` on a pull request.
+name: Gemini code review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    # Gate here, not only inside the shared workflow. Without this, GitHub
+    # spawns a run for every comment on every issue and only then discovers
+    # the called job is skipped. The shared workflow keeps the same condition
+    # as a safety net for a consumer that omits it.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/gemini-review'))
+    uses: morgado-ricardo/ci-shared/.github/workflows/gemini-review.yml@main
+    # Granted here, not in the shared workflow: a called workflow can only
+    # narrow the caller's permissions, never widen them.
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
