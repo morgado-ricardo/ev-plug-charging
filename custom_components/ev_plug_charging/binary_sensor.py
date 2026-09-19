@@ -136,7 +136,7 @@ class InWindowBinarySensor(_BaseBinarySensor):
     @property
     def is_on(self):
         settings = self.coordinator.settings
-        return logic_mod.in_window(dt_util.utcnow(), settings.window_start, settings.window_end)
+        return logic_mod.in_window(dt_util.now(), settings.window_start, settings.window_end)
 
 
 class SourceReachableBinarySensor(_BaseBinarySensor):

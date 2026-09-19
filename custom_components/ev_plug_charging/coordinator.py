@@ -161,7 +161,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # persisted -- without this, the first poll after a restart would
         # have nothing to compare against and would look unconditionally
         # fresh (see source.py's module docstring, R4/R8).
-        now = dt_util.utcnow()
+        now = dt_util.now()
         self._telemetry = source_mod.restored_snapshot(
             self._session_state.prev_soc, self._session_state.prev_soc_changed_at, now
         )
@@ -247,8 +247,8 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # -- the funnel ---------------------------------------------------------
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """DataUpdateCoordinator's own tick: poll PSACC, then evaluate."""
-        now = dt_util.utcnow()
+        """DataUpdateCoordinator's own tick: poll the source, then evaluate."""
+        now = dt_util.now()
         try:
             self._telemetry = await self._source.async_fetch(now, self._telemetry)
         except (SourceConnectionError, SourceResponseError) as err:
@@ -261,7 +261,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """A tick that does NOT poll PSACC (plug event, projection timer,
         window edge) -- re-evaluates against the last known telemetry."""
-        now = dt_util.utcnow()
+        now = dt_util.now()
         await self._async_evaluate(now, window_open_edge, window_close_edge)
         self.async_update_listeners()
 
@@ -435,7 +435,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session_kwh = max(0.0, raw - self._energy_baseline_kwh)
         delta_since_last = max(0.0, session_kwh - prev_state.session_energy_kwh)
 
-        current_month = dt_util.utcnow().month
+        current_month = dt_util.now().month
         if self._monthly_energy_month != current_month:
             self._monthly_energy_month = current_month
             self._monthly_energy_kwh = 0.0
