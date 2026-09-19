@@ -1,0 +1,11 @@
+# Code owners for this repository.
+#
+# Exists because the branch ruleset on the default branch requires a review
+# from a code owner. Without this file no owner matches any path, the
+# requirement is vacuous, and it silently protects nothing.
+#
+# Syntax: last matching pattern wins, so a more specific rule further down
+# overrides this one.
+
+# Everything.
+*       @morgado-ricardo

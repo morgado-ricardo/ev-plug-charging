@@ -1,0 +1,90 @@
+# Gemini review bot configuration — https://github.com/jgunnink/gemini-review-bot
+# Built-in ignores already cover lockfiles, compiled artifacts and minified code.
+# Below is tuned for this Home Assistant custom integration.
+
+# The model is NOT set here any more: it lives in the shared workflow
+# (morgado-ricardo/ci-shared → .github/workflows/gemini-review.yml), which
+# passes it as an action input and so overrides this file. Change it there
+# to change it for every repository at once.
+max_diff_bytes: 400000
+
+ignore:
+  - "custom_components/ev_plug_charging/brand/**"  # PNG icons, nothing to read
+
+instructions: |
+  A Home Assistant custom integration (Python). It schedules EV charging
+  through an ordinary smart plug. The hard part is that state of charge is
+  expensive to fetch and arrives in bursts, so the integration has to
+  PROJECT it between readings rather than poll for it.
+
+  `AGENTS.md` in the repository root is the full contract. The rules below
+  are the ones whose violation is invisible in review unless you are
+  looking for it — every one of them has either already shipped as a bug
+  or is a tested property.
+
+  Layering — the pure core must stay pure:
+  - models.py, logic.py, session.py, rate_model.py, source.py, store.py and
+    aux_battery.py must import NOTHING from `homeassistant` and nothing
+    third-party. This is a tested property, not a style preference: it is
+    what lets the decision core be tested with Home Assistant absent.
+  - sources/psacc.py and __init__.py defer their HA/aiohttp imports into
+    function bodies deliberately. Flag any "tidying" that hoists one of
+    those to module scope.
+  - coordinator.py is a funnel, not a brain. Decisions belong in
+    logic.reduce(). Flag decision logic appearing in a platform module or
+    growing in the coordinator.
+
+  Correctness rules that fail SILENTLY when broken — no error, no warning,
+  and every entity still looks healthy:
+  - Time-of-day comparisons must use LOCAL time (`dt_util.now()`), never
+    `dt_util.utcnow()`. The charge window is naive local wall clock typed
+    into a TimeEntity; comparing it against UTC shifts the whole window by
+    the UTC offset and the charge simply never starts. Flag any new
+    `utcnow()`.
+  - Never gate an actuation on a `now()`-derived display sensor.
+    `binary_sensor.*_in_charge_window` is display-only; the decision
+    re-derives the window fresh inside reduce().
+  - A routine telemetry read must never be able to wake the vehicle. For
+    PSACC that means `?from_cache=1` is never dropped from a poll.
+  - The deliberate wakeup is spent at most once per session. Flag a second
+    code path that can also spend it.
+  - The learned charge rate may only push the stop LATER, never earlier:
+    `effective_rate = max(learned, seed)`. A fast-biased rate stops a
+    charge short of target, which is the one user-visible failure this
+    project cares most about.
+  - Fail closed, never fail silent: a missing or untrustworthy reading must
+    never read as "good enough to stop on", but the user must always be
+    told why nothing happened.
+  - `projected_soc` collapses back to the last real reading when charging
+    stops, and that reading is hours old by construction. Flag anything
+    that could turn the plug back on immediately after the integration
+    itself stopped it — that oscillates every tick until a fresh reading
+    lands.
+  - New config keys need a CONFIG_VERSION bump and an async_migrate_entry
+    arm, not a `.get(key, default)` papering over existing entries.
+
+  Tests:
+  - tests/test_scenarios.py (R1-R14) is the acceptance gate. Each scenario
+    is a real failure that happened once on a real car. Flag ANY edit to a
+    scenario made in order to let a change pass; that is never acceptable,
+    and a scenario believed wrong is a conversation, not a diff.
+  - Tier 2 (tests/test_integration_setup.py) auto-skips when
+    pytest-homeassistant-custom-component is absent, so a green `pytest -q`
+    does NOT prove the Home Assistant layer works. Flag a PR description
+    that claims otherwise.
+  - A new decision-logic branch without a test is worth flagging.
+
+  Conventions:
+  - Entity IDs derive from the DISPLAY NAME, so renaming one silently moves
+    it. tests/test_dashboard_examples.py guards the shipped dashboards
+    against exactly that; flag a new entity whose name and dashboard entry
+    disagree.
+  - Never name a module after a stdlib module.
+  - strings.json and translations/{en,pt}.json move together.
+  - This repository is public and self-contained. Flag any reference to a
+    file, document or section a reader here cannot open — a path into
+    another repository, a "plan section N", a bare design-decision ID like
+    D4 or FR-S2. R1-R14 are fine: they resolve to real tests here.
+
+  Prefer concise, actionable comments. Skip stylistic nits that `ruff`
+  already enforces — it runs on every PR.
