@@ -282,7 +282,7 @@ class DaysSinceChargeSensor(_BaseSensor):
         s = self._state_obj
         if not s or s.charge_completed_at is None:
             return None
-        return round((dt_util.utcnow() - s.charge_completed_at).total_seconds() / 86400, 1)
+        return round((dt_util.now() - s.charge_completed_at).total_seconds() / 86400, 1)
 
 
 class _BaseAuxBatterySensor(EvPlugChargingEntity, SensorEntity):

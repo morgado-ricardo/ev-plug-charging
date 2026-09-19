@@ -299,8 +299,21 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         # would immediately turn it back on within this very reduce()
         # call, before the human's action was ever honoured. Suppress
         # re-assertion for the rest of this window occurrence.
+        #
+        # ONLY while a window is actually open. Off the clock there is no
+        # "rest of this window occurrence" to suppress, and latching then
+        # sets the deadline to the close of the NEXT window -- which
+        # swallows that window whole, so the evening's charge silently
+        # never starts. Turning the plug off at 20:00 says nothing about
+        # whether you want it charging at 23:00.
         manual_off_until = state.manual_off_until
-        if prev_owner == Owner.US:
+        if prev_owner == Owner.US and in_window(
+            inp.now,
+            inp.window_start,
+            inp.window_end,
+            inp.window_open_edge,
+            inp.window_close_edge,
+        ):
             window_close_dt = datetime.combine(
                 inp.now.date(), inp.window_end, tzinfo=inp.now.tzinfo
             )
