@@ -247,7 +247,7 @@ class EvPlugChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> "EvPlugChargingOptionsFlow":
-        return EvPlugChargingOptionsFlow(config_entry)
+        return EvPlugChargingOptionsFlow()
 
 
 def _notify_target_options(hass) -> list[selector.SelectOptionDict]:
@@ -294,8 +294,13 @@ def _notify_target_options(hass) -> list[selector.SelectOptionDict]:
 
 
 class EvPlugChargingOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    """No `__init__` on purpose: `OptionsFlow` provides `self.config_entry`
+    as a property, populated by the flow manager right after construction
+    (not available yet inside `__init__`, but fine from `async_step_init`
+    onward). Assigning it manually here used to work through a
+    compatibility shim -- HA's own `config_entry.setter` -- but that shim
+    was scheduled for removal in 2025.12 and is gone by the time this runs
+    on a real instance, turning every Options open into a 500."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
