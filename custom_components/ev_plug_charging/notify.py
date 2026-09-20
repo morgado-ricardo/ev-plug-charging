@@ -113,10 +113,9 @@ async def async_dispatch_events(
 
 async def _async_push_one(hass: HomeAssistant, target: str, event: Event) -> None:
     """One target, fully isolated: a bad target must never stop the
-    others, and must never crash the tick that triggered it (D8's fail-
-    closed rule is about the CHARGING decision, not about a notification
-    -- but the same "never let a side channel take down the main one"
-    instinct applies)."""
+    others, and must never crash the tick that triggered it -- a
+    notification is a side channel, and a side channel must never be able
+    to take down the main one."""
     try:
         await _async_push(hass, target, event)
     except (ServiceNotFound, vol.Invalid):
