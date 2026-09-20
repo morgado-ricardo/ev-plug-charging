@@ -120,8 +120,8 @@ is caught here rather than three retries into the first poll tonight.
 | Poll interval | 120 s |
 
 Capacity, power, efficiency and the poll interval can be changed later from
-**Options**, along with a notify service, which events to mute, and whether
-the rescue refresh is allowed.
+**Options**, along with notification targets, which events to mute, and
+whether the rescue refresh is allowed.
 
 ## What it creates
 
@@ -238,7 +238,7 @@ source-agnostic equivalent) and the 400 V traction battery's state of health
 ## Events
 
 Every reportable condition fires `ev_plug_charging_<name>` on the event bus,
-whether or not a notify service is configured:
+whether or not any notification target is configured:
 
 `charge_started`, `charge_not_started`, `charge_complete`,
 `window_shortfall`, `soc_stale`, `refresh_attempted`, `bypass_detected`,
@@ -256,6 +256,40 @@ actuated: an EVSE plugged straight into the wall, or a public charger.
 
 Persistent conditions (overheat, bypass, EVSE-no-power, charge-not-started,
 restart-reconciled, both 12 V alerts) also raise a Home Assistant **Repair**.
+
+### Notification targets
+
+**Options → Notification targets** takes a list, reconfigurable at any
+time without removing and re-adding the integration — add or remove a
+phone and it takes effect on the next event, no restart needed.
+
+Pick from a `notify.<device>` **service** (what most companion-app
+integrations register) or a `notify.*` **entity** (what some platforms
+register instead). The picker labels each option so the difference is
+visible before you pick, because it isn't cosmetic:
+
+| | Can carry `title`/`message` | Can carry the critical-alert channel |
+|---|---|---|
+| `notify.<device>` service | ✅ | ✅ |
+| `notify.*` entity | ✅ | ❌ |
+
+A notify **entity**'s `send_message` action only accepts `message` and
+`title` — Home Assistant's own schema for it has no `data` field at all, so
+passing one doesn't degrade gracefully, it fails. That means a notify
+entity **cannot** carry the critical/time-sensitive channel this
+integration uses for `overheat_cutoff` and `aux_battery_critical` — the
+two alerts most worth breaking through a silenced phone for.
+
+If a configured target turns out to be an entity with no matching legacy
+service, the integration falls back to `send_message` automatically rather
+than dropping the notification — but logs a warning once, and the two
+critical events will arrive without their critical-channel data on that
+target. Prefer the `notify.<device>` service for whichever phone you want
+overheat and low-12V alerts to reach no matter what.
+
+Each target fails independently: one target being unavailable (a phone off
+the network, a renamed entity) never stops the others from receiving the
+push.
 
 ## Services
 
@@ -286,6 +320,27 @@ restart-reconciled, both 12 V alerts) also raise a Home Assistant **Repair**.
 Settings → Devices & Services → EV Plug Charging → ⋮ → **Download
 diagnostics** gives you the full anchor, projection and rate-model state
 plus the last decision's reason.
+
+## Attribution in the logbook
+
+Every actuation is fired with its own Home Assistant `Context`, shared with
+an `ev_plug_charging_plug_commanded` event fired immediately before the
+`switch.turn_on`/`turn_off` call. Two consequences:
+
+- Home Assistant's **Logbook** panel shows *"EV Plug Charging: turned the
+  plug on (below_target)"* rather than an anonymous state change — the
+  message names the [decision reason](#debugging-a-charge-that-didnt-start)
+  that triggered it.
+- The plug's **own** history/more-info logbook card gets the same line,
+  via a `logbook_entry` event carrying the plug's `entity_id` — a
+  describable domain event alone doesn't reach that view, because Home
+  Assistant's logbook only looks at event types owned by the same
+  integration as the entities being viewed, and the plug belongs to
+  whichever integration created it, not this one.
+
+This needs the `logbook` integration enabled (on by default). It only
+covers actuations this integration makes — flipping the plug by hand, or
+through an automation, is attributed to whatever did that, same as always.
 
 ## Debugging a charge that didn't start
 

@@ -45,6 +45,7 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/config_flow.py` | Setup wizard (source → source settings → plug → advanced) and options flow. | Yes |
 | `custom_components/ev_plug_charging/{sensor,binary_sensor,switch,number,select,time,button}.py` | Entity platforms. Thin: format `Decision`/coordinator state for display, or push a setting via `request_settings_update()`. | Yes |
 | `custom_components/ev_plug_charging/{notify,repairs,diagnostics,services}.py` | Event dispatch, Repairs, the diagnostics download, the services. | Yes |
+| `custom_components/ev_plug_charging/logbook.py` | Describes `EVENT_PLUG_COMMANDED` for Home Assistant's logbook -- an integration platform, discovered via `manifest.json`'s `after_dependencies`, not an entity platform. | Yes |
 | `custom_components/ev_plug_charging/__init__.py` | `async_setup_entry`, `async_migrate_entry`, platform wiring. | Deferred |
 | `tests/test_scenarios.py` | R1–R14: the regression acceptance gate. | None |
 | `tests/test_*.py` (most others) | Unit tests for the pure core. | None |

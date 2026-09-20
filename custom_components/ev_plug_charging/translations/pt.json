@@ -62,7 +62,7 @@
           "charge_power_kw": "Potência de carga (kW)",
           "charge_efficiency": "Eficiência de carga",
           "poll_interval_seconds": "Intervalo de consulta (segundos)",
-          "notify_service": "Serviço de notificação",
+          "notify_targets": "Alvos de notificação",
           "muted_events": "Eventos silenciados",
           "rescue_refresh_enabled": "Permitir a única atualização de resgate por sessão"
         }
