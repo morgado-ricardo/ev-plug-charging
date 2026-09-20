@@ -41,7 +41,11 @@ _our_path = str(_REPO_ROOT / "custom_components")
 if _our_path not in custom_components.__path__:
     custom_components.__path__.append(_our_path)
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
+from homeassistant.util import dt as dt_util  # noqa: E402
+from pytest_homeassistant_custom_component.common import (  # noqa: E402
+    MockConfigEntry,
+    async_mock_service,
+)
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -105,6 +109,16 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
         },
     )
     entry.add_to_hass(hass)
+
+    # The coordinator's very first refresh can decide to actuate the plug
+    # (below_target, in-window at whatever real wall-clock instant the
+    # test happens to run) -- and async_setup_entry runs that refresh
+    # BEFORE forwarding the switch platform, so the real `switch` domain
+    # services aren't registered yet. Register fakes so a tick that
+    # actuates doesn't fail with ServiceNotFound depending on the clock.
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+
     result = await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entry, result
@@ -123,14 +137,24 @@ async def test_setup_entry_succeeds_and_creates_entities(hass, aioclient_mock):
 
 
 async def test_coordinator_polled_psacc_and_evaluated(hass, aioclient_mock):
+    """Outside the charge window there is nothing to do regardless of SoC --
+    this pins that down at a fixed midday instant so the assertion doesn't
+    depend on the real wall-clock time the test happens to run at (the
+    default window is 23:00-07:00, which a plain `dt_util.now()` can land
+    inside or outside depending on the hour)."""
+    from unittest.mock import patch
+
     from ev_plug_charging.const import DOMAIN
 
-    entry, _ = await _setup_entry(hass, aioclient_mock)
+    noon = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=noon):
+        entry, _ = await _setup_entry(hass, aioclient_mock)
     coordinator = hass.data[DOMAIN][entry.entry_id]
 
     assert aioclient_mock.call_count >= 1
     assert coordinator.last_decision is not None
-    # Vehicle reports Disconnected/not plugged, plug is off -> nothing to do.
+    # Vehicle reports Disconnected/not plugged, plug is off, and it's
+    # midday (outside the 23:00-07:00 window) -> nothing to do.
     from ev_plug_charging.models import PlugAction
 
     assert coordinator.last_decision.plug == PlugAction.UNCHANGED
@@ -205,6 +229,11 @@ async def test_v1_entry_is_migrated_and_backfilled_to_psacc(hass, aioclient_mock
     )
     entry.add_to_hass(hass)
     assert CONF_SOURCE_TYPE not in entry.data
+
+    # See the comment in _setup_entry: the first refresh can actuate the
+    # plug before the real switch services are forwarded.
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
