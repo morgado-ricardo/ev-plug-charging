@@ -62,7 +62,7 @@
           "charge_power_kw": "Charge power (kW)",
           "charge_efficiency": "Charge efficiency",
           "poll_interval_seconds": "Poll interval (seconds)",
-          "notify_service": "Notify service",
+          "notify_targets": "Notification targets",
           "muted_events": "Muted events",
           "rescue_refresh_enabled": "Allow the one-per-session rescue refresh"
         }

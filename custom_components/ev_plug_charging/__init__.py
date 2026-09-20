@@ -16,6 +16,8 @@ import logging
 from typing import TYPE_CHECKING
 
 from .const import (
+    CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGETS,
     CONF_SOURCE_TYPE,
     CONFIG_VERSION,
     DOMAIN,
@@ -80,15 +82,38 @@ async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bo
     thing this could talk to and was hardcoded. Every v1 entry is
     therefore a PSACC entry; backfill it so the source registry can look
     it up like any other.
+
+    v2 -> v3: the single scalar CONF_NOTIFY_SERVICE becomes the list
+    CONF_NOTIFY_TARGETS. Read-time coercion (accepting either shape
+    forever in notify.py) was rejected on purpose -- it never actually
+    finishes migrating anyone, and it means every future read site has to
+    ask "which shape is this?" A real version bump means an entry is
+    unambiguously old or new.
+
+    CONF_NOTIFY_SERVICE has, as far as this codebase's own config flow
+    goes, only ever been written into `options` -- the setup wizard's
+    advanced step never asks for it. `data` is checked too, defensively,
+    in case an entry was hand-edited or came from an earlier build.
     """
     if entry.version == CONFIG_VERSION:
         return True
 
     data = {**entry.data}
+    options = {**entry.options}
 
     if entry.version < 2:
         data.setdefault(CONF_SOURCE_TYPE, SOURCE_TYPE_PSACC)
 
-    hass.config_entries.async_update_entry(entry, data=data, version=CONFIG_VERSION)
+    if entry.version < 3:
+        legacy_target = options.pop(CONF_NOTIFY_SERVICE, None) or data.pop(
+            CONF_NOTIFY_SERVICE, None
+        )
+        options.setdefault(
+            CONF_NOTIFY_TARGETS, [legacy_target] if legacy_target else []
+        )
+
+    hass.config_entries.async_update_entry(
+        entry, data=data, options=options, version=CONFIG_VERSION
+    )
     _LOGGER.debug("Migrated config entry to version %s", CONFIG_VERSION)
     return True

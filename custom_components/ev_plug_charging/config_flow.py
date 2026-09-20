@@ -32,7 +32,7 @@ from .const import (
     CONF_CHARGE_POWER_KW,
     CONF_CHARGING_STATE_STRING,
     CONF_MUTED_EVENTS,
-    CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_TARGETS,
     CONF_PLUG_ENERGY_SENSOR,
     CONF_PLUG_POWER_SENSOR,
     CONF_PLUG_SWITCH,
@@ -250,6 +250,49 @@ class EvPlugChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return EvPlugChargingOptionsFlow(config_entry)
 
 
+def _notify_target_options(hass) -> list[selector.SelectOptionDict]:
+    """Union of both things Home Assistant calls a notify target, each
+    labelled so the difference is visible in the picker rather than
+    discovered the night a critical alert doesn't arrive.
+
+    LEGACY services (`notify.<service>`, e.g. what mobile_app has always
+    registered) accept the full title/message/target/data payload, so
+    they are the only targets that can carry the critical-alert channel
+    notify.py uses for overheat_cutoff and aux_battery_critical.
+
+    Notify ENTITIES (`notify.*` in the entity registry -- some platforms,
+    and newer mobile_app builds, create these) only accept message/title
+    via `send_message`; picking one degrades every critical push it would
+    otherwise have received. Labelled accordingly so that trade is visible
+    at selection time, not discovered later.
+
+    `send_message` itself is excluded from the legacy list -- it is the
+    entity-service action, not a target.
+    """
+    options: list[selector.SelectOptionDict] = []
+
+    services = hass.services.async_services().get("notify", {})
+    for service in sorted(services):
+        if service == "send_message":
+            continue
+        options.append(
+            selector.SelectOptionDict(
+                value=f"notify.{service}",
+                label=f"{service} -- rich payload (critical alerts work)",
+            )
+        )
+
+    for entity_id in sorted(hass.states.async_entity_ids("notify")):
+        options.append(
+            selector.SelectOptionDict(
+                value=entity_id,
+                label=f"{entity_id} -- notify entity (no critical alerts)",
+            )
+        )
+
+    return options
+
+
 class EvPlugChargingOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self.config_entry = config_entry
@@ -264,12 +307,19 @@ class EvPlugChargingOptionsFlow(config_entries.OptionsFlow):
         schema = _advanced_schema(defaults).extend(
             {
                 vol.Optional(
-                    CONF_NOTIFY_SERVICE, default=defaults.get(CONF_NOTIFY_SERVICE)
-                ): vol.Any(
-                    selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="notify")
-                    ),
-                    None,
+                    CONF_NOTIFY_TARGETS, default=defaults.get(CONF_NOTIFY_TARGETS, [])
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=_notify_target_options(self.hass),
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        # A target picked earlier can be temporarily
+                        # unavailable (a phone off the network) when this
+                        # form happens to render -- custom_value lets it
+                        # stay in the list rather than being silently
+                        # dropped because it wasn't in today's options.
+                        custom_value=True,
+                    )
                 ),
                 vol.Optional(
                     CONF_MUTED_EVENTS, default=defaults.get(CONF_MUTED_EVENTS, [])

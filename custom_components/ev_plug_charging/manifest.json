@@ -1,6 +1,7 @@
 {
   "domain": "ev_plug_charging",
   "name": "EV Plug Charging",
+  "after_dependencies": ["logbook"],
   "codeowners": ["@morgado-ricardo"],
   "config_flow": true,
   "dependencies": [],

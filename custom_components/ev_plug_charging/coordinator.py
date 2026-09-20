@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers import event as event_helper
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -431,13 +431,32 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         inputs: Inputs,
         extra_events: tuple[logic_mod.Event, ...] = (),
     ) -> None:
-        if decision.plug == PlugAction.ON:
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": self._plug_switch_entity_id}, blocking=True
+        if decision.plug in (PlugAction.ON, PlugAction.OFF):
+            # A FRESH Context per actuation, never reused or cached on
+            # self: sharing one across ticks would chain every actuation
+            # of this entry's whole lifetime into one causal graph, which
+            # is not what "this call did that" is supposed to mean.
+            actuation_context = Context()
+            action = "on" if decision.plug == PlugAction.ON else "off"
+
+            from .notify import async_fire_plug_actuation
+
+            # Fired BEFORE the switch call, not after -- see
+            # async_fire_plug_actuation's docstring for why the ordering
+            # is load-bearing, not cosmetic.
+            await async_fire_plug_actuation(
+                self.hass,
+                self._plug_switch_entity_id,
+                action,
+                decision.reason,
+                actuation_context,
             )
-        elif decision.plug == PlugAction.OFF:
             await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": self._plug_switch_entity_id}, blocking=True
+                "switch",
+                f"turn_{action}",
+                {"entity_id": self._plug_switch_entity_id},
+                blocking=True,
+                context=actuation_context,
             )
 
         if decision.force_disable:

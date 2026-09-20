@@ -22,7 +22,9 @@ PLATFORMS = [
 
 # v2 added CONF_SOURCE_TYPE; entries created before that are all PSACC,
 # and async_migrate_entry backfills them.
-CONFIG_VERSION = 2
+# v3 replaced CONF_NOTIFY_SERVICE (one scalar target) with CONF_NOTIFY_TARGETS
+# (a list) -- async_migrate_entry wraps the old value into a one-element list.
+CONFIG_VERSION = 3
 
 # --- Telemetry sources -------------------------------------------------------
 # The state-of-charge provider is pluggable: `sources/` holds one module per
@@ -69,7 +71,14 @@ MIN_POLL_INTERVAL_SECONDS = 60
 MAX_POLL_INTERVAL_SECONDS = 600
 
 # --- Options flow -------------------------------------------------------------
+# Legacy (pre-v3): a single scalar target, e.g. "notify.mobile_app_phone" or
+# "mobile_app_phone". Read only by async_migrate_entry now -- nothing else
+# should reference this key.
 CONF_NOTIFY_SERVICE = "notify_service"
+# v3+: a list of targets, each either a legacy notify.<service> name or a
+# notify.* entity id. See notify.py for why both forms have to be supported:
+# only the legacy form can carry the critical-alert payload.
+CONF_NOTIFY_TARGETS = "notify_targets"
 CONF_MUTED_EVENTS = "muted_events"
 CONF_RESCUE_REFRESH_ENABLED = "rescue_refresh_enabled"
 
@@ -153,6 +162,15 @@ EVENT_SOC_FULL = f"{DOMAIN}_soc_full"
 EVENT_RESTART_RECONCILED_OFF = f"{DOMAIN}_restart_reconciled_off"
 EVENT_AUX_BATTERY_LOW = f"{DOMAIN}_aux_battery_low"
 EVENT_AUX_BATTERY_CRITICAL = f"{DOMAIN}_aux_battery_critical"
+
+# Fired around every plug actuation, carrying the SAME Context as the
+# switch.turn_on/turn_off call it brackets -- see coordinator.py's
+# _act_on_decision and notify.py's async_fire_plug_actuation. This is an
+# audit trail, not a reportable condition: it is fired directly, never
+# through async_dispatch_events, so CONF_MUTED_EVENTS does not apply to it
+# and it never triggers a push. Its only job is to give Home Assistant's
+# logbook something to attribute the plug's state change to.
+EVENT_PLUG_COMMANDED = f"{DOMAIN}_plug_commanded"
 
 # Events that raise a self-clearing Repairs issue in addition to firing.
 PERSISTENT_EVENTS = frozenset(
