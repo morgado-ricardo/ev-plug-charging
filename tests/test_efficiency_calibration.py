@@ -219,6 +219,139 @@ async def test_calibration_pair_untouched_with_no_open_session(hass, aioclient_m
     assert result.calib_soc_first is None
 
 
+async def test_stale_soc_mid_session_does_not_bias_the_efficiency_sample(hass, aioclient_mock):
+    """SoC reports +12 points and then goes silent while the plug keeps
+    delivering -- the paired measurement must use the energy delivered
+    up to the LAST FRESH reading, never the session's eventual total
+    (which would silently mix in energy the reading never saw). Chosen
+    so the two give starkly different, individually distinguishable
+    answers: the correct (paired) delta yields a plausible 0.75; the
+    buggy (session-total) delta would yield an implausible ~0.21 and
+    get rejected outright."""
+    from ev_plug_charging import rate_model
+
+    entry, coordinator = await _setup_entry(hass, aioclient_mock)
+
+    start = datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)
+    coordinator._session_state = replace(coordinator._session_state, charge_started_at=start)
+
+    # First fresh reading: 60% at 1.0 kWh delivered.
+    prev = coordinator._session_state
+    new = replace(prev, session_energy_kwh=1.0)
+    coordinator._session_state = coordinator._track_calibration_pair(
+        prev, new, _inputs(now=start, soc=60.0, soc_changed_at=start)
+    )
+
+    # Second fresh reading, an hour later: 72% (+12) at 9.0 kWh delivered.
+    reading_time = start + timedelta(hours=1)
+    prev = coordinator._session_state
+    new = replace(prev, session_energy_kwh=9.0)
+    coordinator._session_state = coordinator._track_calibration_pair(
+        prev, new, _inputs(now=reading_time, soc=72.0, soc_changed_at=reading_time)
+    )
+    assert coordinator._session_state.calib_soc_last == 72.0
+    assert coordinator._session_state.calib_energy_last == 9.0
+    # Simulate what logic.reduce() would have done: prev_soc_changed_at now
+    # tracks this reading, so a later tick with the SAME soc_changed_at is
+    # correctly recognised as stale, not fresh.
+    coordinator._session_state = replace(coordinator._session_state, prev_soc_changed_at=reading_time)
+
+    # SoC then goes silent (soc_changed_at unchanged) for the rest of the
+    # charge, even though energy keeps accumulating -- more ticks, same
+    # soc_changed_at, session_energy_kwh climbing well past 9.0.
+    for hours, energy in ((2, 15.0), (3, 22.0), (4, 30.0)):
+        prev = coordinator._session_state
+        new = replace(prev, session_energy_kwh=energy)
+        coordinator._session_state = coordinator._track_calibration_pair(
+            prev,
+            new,
+            _inputs(now=start + timedelta(hours=hours), soc=72.0, soc_changed_at=reading_time),
+        )
+
+    # The pair must still be pinned at the last FRESH reading's energy.
+    assert coordinator._session_state.calib_soc_last == 72.0
+    assert coordinator._session_state.calib_energy_last == 9.0
+    assert coordinator._session_state.session_energy_kwh == 30.0  # session kept moving
+
+    session = rate_model.CompletedSession(
+        duration_minutes=90.0,
+        soc_gained=12.0,
+        stayed_on_plug=True,
+        ran_above_target=False,
+        anchor_provisional_unresolved=False,
+        stop_reason="power_drop",
+    )
+    result_state = rate_model.record_efficiency_sample(coordinator._session_state, session, 50.0)
+    # capacity(50) * 12/100 / (9.0 - 1.0) == 0.75 -- the paired delta.
+    # Had this used the session total instead (30.0 - 1.0 == 29.0), the
+    # result would be ~0.21 and get rejected as implausible.
+    assert len(result_state.efficiency_samples) == 1
+    assert result_state.efficiency_samples[0] == pytest.approx(0.75)
+
+
+async def test_soc_never_changes_emits_no_sample(hass, aioclient_mock):
+    """A session where the car's SoC report never moves at all: only the
+    very first tick looks "fresh" (source.py's own documented caveat --
+    None != anything), so calib_soc_last must never be set and no
+    efficiency sample must ever be produced -- correctly inert, the same
+    way accept_session's soc_gained gate already keeps this case out of
+    the rate model."""
+    from ev_plug_charging.models import SessionAnchor
+
+    entry, coordinator = await _setup_entry(hass, aioclient_mock)
+
+    start = datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)
+    coordinator._session_state = replace(
+        coordinator._session_state,
+        charge_started_at=start,
+        anchor=SessionAnchor(soc=55.0, captured_at=start, provisional=False, corrected=True),
+    )
+
+    prev = coordinator._session_state
+    new = replace(prev, session_energy_kwh=1.0)
+    coordinator._session_state = coordinator._track_calibration_pair(
+        prev, new, _inputs(now=start, soc=55.0, soc_changed_at=start)
+    )
+    assert coordinator._session_state.calib_soc_first == 55.0
+    assert coordinator._session_state.calib_soc_last is None
+    # Simulate what logic.reduce() would have set: prev_soc_changed_at now
+    # tracks the one reading that's ever arrived.
+    coordinator._session_state = replace(coordinator._session_state, prev_soc_changed_at=start)
+
+    for hours, energy in ((1, 5.0), (2, 10.0), (3, 15.0)):
+        prev = coordinator._session_state
+        new = replace(prev, session_energy_kwh=energy)
+        coordinator._session_state = coordinator._track_calibration_pair(
+            prev,
+            new,
+            # Identical soc AND identical soc_changed_at every tick -- the
+            # car never reported a new value.
+            _inputs(now=start + timedelta(hours=hours), soc=55.0, soc_changed_at=start),
+        )
+        # Not a fresh reading -- prev_soc_changed_at must stay pinned too,
+        # matching what logic.reduce() would do (it only ever advances on
+        # an actually fresh reading).
+        coordinator._session_state = replace(coordinator._session_state, prev_soc_changed_at=start)
+
+    assert coordinator._session_state.calib_soc_last is None
+    assert coordinator._session_state.calib_energy_last is None
+
+    coordinator._pending_efficiency_stop_reason = "power_drop"
+    coordinator._try_record_efficiency_sample()
+    assert coordinator._session_state.efficiency_samples == ()
+    # calib_soc_last is still None -- the pair never completed, so the
+    # retry correctly keeps waiting rather than emitting anything. It only
+    # gives up once session.py resets the pair for the NEXT session (see
+    # test_retry_is_a_no_op_once_the_next_session_resets_the_pair above).
+    assert coordinator._pending_efficiency_stop_reason == "power_drop"
+
+    from ev_plug_charging import rate_model
+
+    prior = 0.75
+    working = rate_model.working_efficiency(coordinator._session_state.efficiency_samples, prior)
+    assert working == prior  # stayed inert at the prior
+
+
 # --------------------------------------------------------------------------- #
 # The deferred/retried efficiency sample -- the sparse-telemetry case
 # --------------------------------------------------------------------------- #
