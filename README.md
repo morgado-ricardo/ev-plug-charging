@@ -105,19 +105,26 @@ is caught here rather than three retries into the first poll tonight.
 | Plug switch | the `switch.*` that controls power to the EVSE |
 | Plug power sensor | the `sensor.*` (device class `power`) reading its draw |
 
-**Step 4 — advanced** (optional, sensible defaults):
+**Step 4 — advanced:**
 
 | Field | Default |
 |---|---|
-| Plug energy sensor | — |
+| Plug energy sensor | *(required — see below)* |
 | Plug temperature sensor | — |
 | Temperature limit | 65 °C |
 | Battery capacity | 50 kWh |
-| Charge power | 1.84 kW (a typical 8 A Schuko EVSE) |
-| Charge efficiency | 0.82 |
+| Charging current | 8 A — whatever's printed on your EVSE or granny cable |
 | Poll interval | 120 s |
 
-Capacity, power, efficiency and the poll interval can be changed later from
+The plug energy sensor is the only field that isn't optional here: it's
+what session cost is computed from, and there's nothing sensible to default
+it to. Everything else has a working default and can be left as-is.
+
+There's no charge-efficiency field. It's the one number in this table
+nobody can actually look up, so it's a fixed internal value (0.82) rather
+than a guess dressed up as a setting.
+
+Capacity, current and the poll interval can be changed later from
 **Options**, along with notification targets, which events to mute, and
 whether the rescue refresh is allowed.
 

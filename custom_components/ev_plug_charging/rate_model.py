@@ -46,6 +46,17 @@ def seed_rate(capacity_kwh: float, power_kw: float, efficiency: float) -> float:
     return (capacity_kwh / 100.0) / (power_kw * efficiency) * 60.0
 
 
+def seed_rate_from_amps(
+    capacity_kwh: float, current_a: float, voltage_v: float, efficiency: float
+) -> float:
+    """Same formula as seed_rate(), starting from what a user actually
+    knows (amps) rather than an effective kW figure nobody does. A new
+    function, not a change to seed_rate()'s signature -- kept stable for
+    the config-entry migration path, which still has old kW/efficiency
+    pairs to convert, and for existing callers/tests."""
+    return seed_rate(capacity_kwh, current_a * voltage_v / 1000.0, efficiency)
+
+
 def learned_rate(samples: tuple[float, ...]) -> float | None:
     """Median of the most recent accepted samples, or None if there are not
     enough yet to trust (RATE_MODEL_MIN_SAMPLES)."""

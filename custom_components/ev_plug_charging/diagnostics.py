@@ -38,10 +38,11 @@ async def async_get_config_entry_diagnostics(
     seed = None
     learned = None
     try:
-        seed = rate_model.seed_rate(
+        seed = rate_model.seed_rate_from_amps(
             entry.options.get("battery_capacity_kwh", entry.data.get("battery_capacity_kwh", 50.0)),
-            entry.options.get("charge_power_kw", entry.data.get("charge_power_kw", 1.84)),
-            entry.options.get("charge_efficiency", entry.data.get("charge_efficiency", 0.82)),
+            entry.options.get("charge_current_a", entry.data.get("charge_current_a", 8.0)),
+            230.0,
+            entry.data.get("efficiency_prior", 0.82),
         )
         learned = rate_model.learned_rate(state.rate_samples)
     except (ValueError, ZeroDivisionError):

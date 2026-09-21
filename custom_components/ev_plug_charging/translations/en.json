@@ -26,14 +26,13 @@
       },
       "advanced": {
         "title": "Advanced",
-        "description": "Optional signals and the rate model. Sensible defaults are filled in; you can leave them as-is.",
+        "description": "The plug energy sensor is needed to track session cost. Everything else has a sensible default filled in; you can leave it as-is.",
         "data": {
           "plug_energy_sensor_entity_id": "Plug energy sensor",
           "plug_temperature_sensor_entity_id": "Plug temperature sensor",
           "temperature_limit_c": "Plug temperature limit (°C)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "charge_power_kw": "Charge power (kW)",
-          "charge_efficiency": "Charge efficiency",
+          "charge_current_a": "Charging current (A)",
           "poll_interval_seconds": "Poll interval (seconds)"
         }
       }
@@ -57,8 +56,7 @@
           "plug_temperature_sensor_entity_id": "Plug temperature sensor",
           "temperature_limit_c": "Plug temperature limit (°C)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "charge_power_kw": "Charge power (kW)",
-          "charge_efficiency": "Charge efficiency",
+          "charge_current_a": "Charging current (A)",
           "poll_interval_seconds": "Poll interval (seconds)",
           "notify_targets": "Notification targets",
           "muted_events": "Muted events",

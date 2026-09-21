@@ -16,13 +16,20 @@ import logging
 from typing import TYPE_CHECKING
 
 from .const import (
+    CONF_CHARGE_CURRENT_A,
+    CONF_CHARGE_EFFICIENCY,
+    CONF_CHARGE_POWER_KW,
+    CONF_EFFICIENCY_PRIOR,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_TARGETS,
     CONF_SOURCE_TYPE,
     CONFIG_VERSION,
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_CHARGE_POWER_KW,
     DOMAIN,
     PLATFORMS,
     SOURCE_TYPE_PSACC,
+    SUPPLY_VOLTAGE_V,
 )
 
 if TYPE_CHECKING:
@@ -64,8 +71,8 @@ async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> boo
 
 
 async def _async_update_listener(hass: "HomeAssistant", entry: "ConfigEntry") -> None:
-    """Options changed (poll interval, capacity/power/efficiency, notify
-    service, ...) -- reload the entry to pick them up. A capacity change
+    """Options changed (poll interval, capacity/current, notify targets,
+    ...) -- reload the entry to pick them up. A capacity change
     does NOT automatically clear the rate-learning buffer, although stale
     samples plus a new seed do give a discontinuous cap --
     `button.<name>_reset_rate_learning` does that
@@ -94,6 +101,21 @@ async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bo
     goes, only ever been written into `options` -- the setup wizard's
     advanced step never asks for it. `data` is checked too, defensively,
     in case an entry was hand-edited or came from an earlier build.
+
+    v3 -> v4: CONF_CHARGE_POWER_KW (a kW figure) becomes CONF_CHARGE_CURRENT_A
+    (amps, converted at a fixed 230V -- exact for anyone actually on 230V,
+    and the coordinator's measured-power path supersedes this arithmetic
+    the moment real telemetry is available). CONF_CHARGE_EFFICIENCY becomes
+    CONF_EFFICIENCY_PRIOR, carried forward UNCHANGED -- a tuned value stays
+    tuned, it just isn't reachable from any form field any more.
+
+    Unlike CONF_NOTIFY_SERVICE, both old keys can genuinely be in EITHER
+    data (written there by the initial setup wizard) OR options (written
+    there by a later Options save, which resubmits every advanced-step
+    field) -- an entry that has been through Options at least once has the
+    stale value in `data` and the current one in `options` simultaneously.
+    So both dicts are popped unconditionally, not short-circuited, with
+    `options` winning as the more recent value when both are present.
     """
     if entry.version == CONFIG_VERSION:
         return True
@@ -111,6 +133,22 @@ async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bo
         options.setdefault(
             CONF_NOTIFY_TARGETS, [legacy_target] if legacy_target else []
         )
+
+    if entry.version < 4:
+        legacy_power_kw = data.pop(CONF_CHARGE_POWER_KW, None)
+        legacy_power_kw = options.pop(CONF_CHARGE_POWER_KW, legacy_power_kw)
+        if legacy_power_kw is None:
+            legacy_power_kw = DEFAULT_CHARGE_POWER_KW
+
+        legacy_efficiency = data.pop(CONF_CHARGE_EFFICIENCY, None)
+        legacy_efficiency = options.pop(CONF_CHARGE_EFFICIENCY, legacy_efficiency)
+        if legacy_efficiency is None:
+            legacy_efficiency = DEFAULT_CHARGE_EFFICIENCY
+
+        options.setdefault(
+            CONF_CHARGE_CURRENT_A, legacy_power_kw * 1000.0 / SUPPLY_VOLTAGE_V
+        )
+        data.setdefault(CONF_EFFICIENCY_PRIOR, legacy_efficiency)
 
     hass.config_entries.async_update_entry(
         entry, data=data, options=options, version=CONFIG_VERSION

@@ -68,8 +68,7 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_power="sensor.plug_power"):
     from ev_plug_charging.const import (
         CONF_BATTERY_CAPACITY_KWH,
-        CONF_CHARGE_EFFICIENCY,
-        CONF_CHARGE_POWER_KW,
+        CONF_CHARGE_CURRENT_A,
         CONF_PLUG_POWER_SENSOR,
         CONF_PLUG_SWITCH,
         CONF_POLL_INTERVAL,
@@ -100,8 +99,7 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
             CONF_PLUG_SWITCH: plug_switch,
             CONF_PLUG_POWER_SENSOR: plug_power,
             CONF_BATTERY_CAPACITY_KWH: 50.0,
-            CONF_CHARGE_POWER_KW: 1.84,
-            CONF_CHARGE_EFFICIENCY: 0.82,
+            CONF_CHARGE_CURRENT_A: 8.0,
             CONF_TEMP_LIMIT: 65.0,
             CONF_POLL_INTERVAL: 120,
         },
@@ -250,6 +248,7 @@ async def test_config_flow_picks_a_source_then_configures_it(hass, aioclient_moc
     from homeassistant.data_entry_flow import FlowResultType
 
     from ev_plug_charging.const import (
+        CONF_PLUG_ENERGY_SENSOR,
         CONF_PLUG_POWER_SENSOR,
         CONF_PLUG_SWITCH,
         CONF_PSACC_URL,
@@ -295,12 +294,67 @@ async def test_config_flow_picks_a_source_then_configures_it(hass, aioclient_moc
     )
     assert result["step_id"] == "advanced"
 
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    # CONF_PLUG_ENERGY_SENSOR is the one field in this step with no
+    # default -- everything else can be left as {} and still validate.
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PLUG_ENERGY_SENSOR: "sensor.plug_energy"}
+    )
     await hass.async_block_till_done()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SOURCE_TYPE] == SOURCE_TYPE_PSACC
     assert result["data"][CONF_PSACC_URL] == "http://psacc.example"
+
+
+async def test_advanced_step_requires_the_plug_energy_sensor(hass, aioclient_mock):
+    """Unlike every other advanced-step field, there is no sensible default
+    to fall back to for a sensor nobody has picked yet -- submitting the
+    step with nothing at all must be rejected, not silently create an
+    entry with session cost permanently stuck at 0. Schema validation
+    failures surface as InvalidData at this level (a production run's
+    frontend catches it and re-shows the form with errors; that layer
+    isn't exercised by calling async_configure directly)."""
+    from homeassistant.data_entry_flow import InvalidData
+
+    from ev_plug_charging.const import (
+        CONF_PLUG_POWER_SENSOR,
+        CONF_PLUG_SWITCH,
+        CONF_PSACC_URL,
+        CONF_SOURCE_TYPE,
+        CONF_VIN,
+        DOMAIN,
+        SOURCE_TYPE_PSACC,
+    )
+
+    hass.states.async_set("switch.plug", "off")
+    hass.states.async_set("sensor.plug_power", "0")
+    aioclient_mock.get(
+        "http://psacc.example/get_vehicleinfo/VF1TESTVIN?from_cache=1",
+        json=VEHICLE_INFO_RESPONSE,
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SOURCE_TYPE: SOURCE_TYPE_PSACC}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PSACC_URL: "http://psacc.example", CONF_VIN: "VF1TESTVIN"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_PLUG_SWITCH: "switch.plug",
+            CONF_PLUG_POWER_SENSOR: "sensor.plug_power",
+        },
+    )
+    assert result["step_id"] == "advanced"
+
+    with pytest.raises(InvalidData) as excinfo:
+        await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert excinfo.value.path == ["plug_energy_sensor_entity_id"]
 
 
 async def test_config_flow_reports_an_unreachable_source(hass, aioclient_mock):
@@ -550,6 +604,123 @@ async def test_v2_entry_migrates_scalar_notify_service_to_a_target_list(hass, ai
     assert CONF_NOTIFY_SERVICE not in entry.data
 
 
+async def test_migrate_v3_to_v4_preserves_tuned_values(hass, aioclient_mock):
+    """The v3 -> v4 arm: the old kW/efficiency pair the setup wizard always
+    wrote to `data` converts to amps/prior -- 1.84kW at 230V is exactly 8A,
+    and the tuned efficiency carries forward UNCHANGED rather than being
+    reset to a default. Both old keys are gone afterwards."""
+    from ev_plug_charging.const import (
+        CONF_CHARGE_CURRENT_A,
+        CONF_CHARGE_EFFICIENCY,
+        CONF_CHARGE_POWER_KW,
+        CONF_EFFICIENCY_PRIOR,
+        CONF_PLUG_POWER_SENSOR,
+        CONF_PLUG_SWITCH,
+        CONF_PSACC_URL,
+        CONF_SOURCE_TYPE,
+        CONF_VIN,
+        CONFIG_VERSION,
+        DOMAIN,
+        SOURCE_TYPE_PSACC,
+    )
+
+    hass.states.async_set("switch.plug", "off")
+    hass.states.async_set("sensor.plug_power", "0")
+    aioclient_mock.get(
+        "http://psacc.example/get_vehicleinfo/VF1TESTVIN?from_cache=1",
+        json=VEHICLE_INFO_RESPONSE,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=3,
+        data={
+            CONF_SOURCE_TYPE: SOURCE_TYPE_PSACC,
+            CONF_PSACC_URL: "http://psacc.example",
+            CONF_VIN: "VF1TESTVIN",
+            CONF_PLUG_SWITCH: "switch.plug",
+            CONF_PLUG_POWER_SENSOR: "sensor.plug_power",
+            CONF_CHARGE_POWER_KW: 1.84,
+            CONF_CHARGE_EFFICIENCY: 0.82,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == CONFIG_VERSION
+    assert entry.options[CONF_CHARGE_CURRENT_A] == pytest.approx(8.0)
+    assert entry.data[CONF_EFFICIENCY_PRIOR] == 0.82
+    assert CONF_CHARGE_POWER_KW not in entry.data
+    assert CONF_CHARGE_POWER_KW not in entry.options
+    assert CONF_CHARGE_EFFICIENCY not in entry.data
+    assert CONF_CHARGE_EFFICIENCY not in entry.options
+
+
+async def test_migrate_v3_to_v4_removes_stale_data_copy_when_options_is_newer(
+    hass, aioclient_mock
+):
+    """An entry that has been through Options at least once has the CURRENT
+    value in `options` (Options resubmits every advanced-step field) and a
+    STALE copy still sitting in `data` (Options never touches `data`).
+    Migration must prefer the options value and remove the stale one --
+    not just pop whichever dict it checks first and leave the other."""
+    from ev_plug_charging.const import (
+        CONF_CHARGE_CURRENT_A,
+        CONF_CHARGE_EFFICIENCY,
+        CONF_CHARGE_POWER_KW,
+        CONF_EFFICIENCY_PRIOR,
+        CONF_PLUG_POWER_SENSOR,
+        CONF_PLUG_SWITCH,
+        CONF_PSACC_URL,
+        CONF_SOURCE_TYPE,
+        CONF_VIN,
+        CONFIG_VERSION,
+        DOMAIN,
+        SOURCE_TYPE_PSACC,
+    )
+
+    hass.states.async_set("switch.plug", "off")
+    hass.states.async_set("sensor.plug_power", "0")
+    aioclient_mock.get(
+        "http://psacc.example/get_vehicleinfo/VF1TESTVIN?from_cache=1",
+        json=VEHICLE_INFO_RESPONSE,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=3,
+        data={
+            CONF_SOURCE_TYPE: SOURCE_TYPE_PSACC,
+            CONF_PSACC_URL: "http://psacc.example",
+            CONF_VIN: "VF1TESTVIN",
+            CONF_PLUG_SWITCH: "switch.plug",
+            CONF_PLUG_POWER_SENSOR: "sensor.plug_power",
+            # Stale: the value the setup wizard wrote, since superseded.
+            CONF_CHARGE_POWER_KW: 1.84,
+            CONF_CHARGE_EFFICIENCY: 0.82,
+        },
+        options={
+            # Current: what a later Options save actually left in place.
+            CONF_CHARGE_POWER_KW: 3.68,  # 16A
+            CONF_CHARGE_EFFICIENCY: 0.9,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == CONFIG_VERSION
+    assert entry.options[CONF_CHARGE_CURRENT_A] == pytest.approx(16.0)
+    assert entry.data[CONF_EFFICIENCY_PRIOR] == 0.9
+    assert CONF_CHARGE_POWER_KW not in entry.data
+    assert CONF_CHARGE_POWER_KW not in entry.options
+    assert CONF_CHARGE_EFFICIENCY not in entry.data
+    assert CONF_CHARGE_EFFICIENCY not in entry.options
+
+
 async def test_options_flow_round_trips_notify_targets(hass, aioclient_mock):
     """The actual "reconfigurable without redoing the integration"
     requirement: submit targets through the options flow, confirm they
@@ -559,10 +730,10 @@ async def test_options_flow_round_trips_notify_targets(hass, aioclient_mock):
     silently because it wasn't in that render's live-computed option list."""
     from ev_plug_charging.const import (
         CONF_BATTERY_CAPACITY_KWH,
-        CONF_CHARGE_EFFICIENCY,
-        CONF_CHARGE_POWER_KW,
+        CONF_CHARGE_CURRENT_A,
         CONF_MUTED_EVENTS,
         CONF_NOTIFY_TARGETS,
+        CONF_PLUG_ENERGY_SENSOR,
         CONF_PLUG_POWER_SENSOR,
         CONF_PLUG_SWITCH,
         CONF_PSACC_URL,
@@ -603,10 +774,10 @@ async def test_options_flow_round_trips_notify_targets(hass, aioclient_mock):
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
+            CONF_PLUG_ENERGY_SENSOR: "sensor.plug_energy",
             CONF_TEMP_LIMIT: 65.0,
             CONF_BATTERY_CAPACITY_KWH: 50.0,
-            CONF_CHARGE_POWER_KW: 1.84,
-            CONF_CHARGE_EFFICIENCY: 0.82,
+            CONF_CHARGE_CURRENT_A: "8",
             "poll_interval_seconds": 120,
             CONF_NOTIFY_TARGETS: ["notify.phone_a", "notify.phone_b"],
             CONF_MUTED_EVENTS: [],

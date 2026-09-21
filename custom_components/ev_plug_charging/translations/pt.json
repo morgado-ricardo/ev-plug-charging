@@ -26,14 +26,13 @@
       },
       "advanced": {
         "title": "Avançado",
-        "description": "Sinais opcionais e o modelo de taxa de carregamento. Os valores por omissão são razoáveis; podes deixá-los como estão.",
+        "description": "O sensor de energia da tomada é necessário para acompanhar o custo da sessão. Tudo o resto tem um valor por omissão razoável; podes deixá-lo como está.",
         "data": {
           "plug_energy_sensor_entity_id": "Sensor de energia da tomada",
           "plug_temperature_sensor_entity_id": "Sensor de temperatura da tomada",
           "temperature_limit_c": "Limite de temperatura da tomada (°C)",
           "battery_capacity_kwh": "Capacidade da bateria (kWh)",
-          "charge_power_kw": "Potência de carga (kW)",
-          "charge_efficiency": "Eficiência de carga",
+          "charge_current_a": "Corrente de carga (A)",
           "poll_interval_seconds": "Intervalo de consulta (segundos)"
         }
       }
@@ -57,8 +56,7 @@
           "plug_temperature_sensor_entity_id": "Sensor de temperatura da tomada",
           "temperature_limit_c": "Limite de temperatura da tomada (°C)",
           "battery_capacity_kwh": "Capacidade da bateria (kWh)",
-          "charge_power_kw": "Potência de carga (kW)",
-          "charge_efficiency": "Eficiência de carga",
+          "charge_current_a": "Corrente de carga (A)",
           "poll_interval_seconds": "Intervalo de consulta (segundos)",
           "notify_targets": "Alvos de notificação",
           "muted_events": "Eventos silenciados",

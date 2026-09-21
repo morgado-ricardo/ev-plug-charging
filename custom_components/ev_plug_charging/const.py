@@ -24,7 +24,13 @@ PLATFORMS = [
 # and async_migrate_entry backfills them.
 # v3 replaced CONF_NOTIFY_SERVICE (one scalar target) with CONF_NOTIFY_TARGETS
 # (a list) -- async_migrate_entry wraps the old value into a one-element list.
-CONFIG_VERSION = 3
+# v4 replaced CONF_CHARGE_POWER_KW (a kW figure nobody actually knows) with
+# CONF_CHARGE_CURRENT_A (amps, what's printed on the EVSE/granny cable), and
+# hid CONF_CHARGE_EFFICIENCY behind CONF_EFFICIENCY_PRIOR -- no longer asked
+# for, since nobody knows it either. async_migrate_entry converts the old kW
+# figure to the equivalent amps at 230V and carries the old efficiency value
+# forward unchanged as the new prior.
+CONFIG_VERSION = 4
 
 # --- Telemetry sources -------------------------------------------------------
 # The state-of-charge provider is pluggable: `sources/` holds one module per
@@ -54,18 +60,44 @@ CONF_PLUG_SWITCH = "plug_switch_entity_id"
 CONF_PLUG_POWER_SENSOR = "plug_power_sensor_entity_id"
 
 # --- Config flow: advanced step ----------------------------------------------
+# Required (not Optional) as of v4: it is the one thing that makes the
+# efficiency prior calibratable, and asking for it up front is cheaper than
+# discovering its absence later. An entry that predates this still loads
+# without one -- see coordinator.py.
 CONF_PLUG_ENERGY_SENSOR = "plug_energy_sensor_entity_id"
 CONF_PLUG_TEMP_SENSOR = "plug_temperature_sensor_entity_id"
 CONF_TEMP_LIMIT = "temperature_limit_c"
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
+# v4-retired: a kW figure nobody actually knows. Read only by
+# async_migrate_entry now -- nothing else should reference this key.
 CONF_CHARGE_POWER_KW = "charge_power_kw"
+# v4+: amps, what's printed on the EVSE or granny cable. seed_rate_from_amps()
+# (rate_model.py) converts this to the same effective kW CONF_CHARGE_POWER_KW
+# used to supply, at a fixed 230V (the socket's own power sensor supersedes
+# this arithmetic once real telemetry is available -- see coordinator.py).
+CONF_CHARGE_CURRENT_A = "charge_current_a"
+# v4-retired: nobody knows their charge efficiency either, and unlike the
+# amps it was never something a user could look up and enter honestly. Read
+# only by async_migrate_entry now.
 CONF_CHARGE_EFFICIENCY = "charge_efficiency"
+# v4+: replaces CONF_CHARGE_EFFICIENCY as a fixed, hidden prior -- not asked
+# for in any form. Self-calibration against measured telemetry is future
+# work; until then this is just the seed's efficiency factor under another
+# name.
+CONF_EFFICIENCY_PRIOR = "efficiency_prior"
 CONF_POLL_INTERVAL = "poll_interval_seconds"
 
 DEFAULT_TEMP_LIMIT_C = 65
 DEFAULT_BATTERY_CAPACITY_KWH = 50.0
 DEFAULT_CHARGE_POWER_KW = 1.84
+DEFAULT_CHARGE_CURRENT_A = 8.0
 DEFAULT_CHARGE_EFFICIENCY = 0.82
+# Same value as DEFAULT_CHARGE_EFFICIENCY today -- deliberately NOT lowered
+# yet. A pessimistic default is only safe to ship alongside the calibration
+# that corrects it; until that lands, a lower default would just mean every
+# new install overshoots every night for no offsetting benefit.
+DEFAULT_EFFICIENCY_PRIOR = 0.82
+SUPPLY_VOLTAGE_V = 230.0
 DEFAULT_POLL_INTERVAL_SECONDS = 120
 MIN_POLL_INTERVAL_SECONDS = 60
 MAX_POLL_INTERVAL_SECONDS = 600
