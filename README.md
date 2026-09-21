@@ -10,6 +10,31 @@ switch it off.
 It charges to a target state of charge, inside a window you choose, and
 stops on time **without polling or waking the vehicle**.
 
+## Why a plug instead of the car's own scheduling
+
+The obvious alternative is the manufacturer's own app: set a target and a
+schedule, and let the car manage its own charge. In practice, on a
+Stellantis-platform car, that has not been reliable enough to leave
+unattended:
+
+- **The Connected Car API can fail silently.** A scheduled stop that
+  depends on the car receiving and acting on a cloud command has, from
+  experience, occasionally just not happened — the charge kept going to
+  100% instead of stopping where it was told to. A dumb smart plug that
+  physically cuts AC power cannot fail that way: if the relay is open, no
+  current flows, full stop, no cloud round trip involved.
+- **Checking on it costs 12 V battery.** Every status query wakes the car
+  over its cellular link, and polling often enough to catch a scheduling
+  failure before it matters burns more 12 V budget than it saves — the
+  same cost this integration goes out of its way to avoid everywhere else
+  (see below).
+
+There's also a plain financial reason to want your own plug and your own
+window, independent of the above: the cheap electricity rate here runs
+22:00–08:00, and a window you fully control is a simple, reliable way to
+make sure charging actually happens inside it — not whatever the
+manufacturer's own scheduler happens to decide.
+
 ## The problem this actually solves
 
 A smart plug can cut power. It cannot tell you the battery is at 80%.
@@ -37,18 +62,39 @@ report on it.
 It also stops on a **time** limit, for when you have no telemetry at all, or
 the plug is occasionally used by a different car.
 
-## Telemetry is an input, not the product
+## The plug decides; telemetry only calibrates
 
-State of charge comes from a pluggable **telemetry source**. Today there is
-one: [PSA Car Controller](https://github.com/flobz/psa_car_controller)
+**The plug's own power draw — never the car's reported charging status — is
+what starts, tracks, and completes a session.** That is not a preference,
+it is a hardened rule, added after a stale "still charging" status from the
+vehicle API turned an empty charge window into a false "charge complete"
+notification within five minutes of the window opening, with nothing
+actually plugged in. Every session start, every projection tick, and every
+stop condition is now gated on the plug physically delivering current — the
+car's own reported status can still classify *how* a charge is happening
+(through this plug, bypassed straight into the wall, or not at all), but it
+can never by itself start, extend, or end one.
+
+State of charge comes from a pluggable **telemetry source** on top of that.
+Today there is one: [PSA Car Controller](https://github.com/flobz/psa_car_controller)
 (PSACC), which covers Peugeot, Citroën, DS, Opel/Vauxhall and the
-PSA-platform Fiat/Jeep models.
+PSA-platform Fiat/Jeep models. It supplies the anchor and the corrections
+the projection uses to time the stop precisely — and nothing more. Even a
+wrong or stale reading is bounded so it can only push the stop **later**,
+never earlier: see [The rate model](#the-rate-model-and-why-it-only-ever-slows-down)
+and [Efficiency self-calibration](#efficiency-self-calibration-and-measured-ac-power).
 
-PSACC is a good fit and it is what exists now — but it is not what makes
-this useful. Everything above the source works on a *normalised snapshot*: a
-number, a "is it charging" flag, and a timestamp. Nothing in the projection,
-the stop, the staleness detection or the rate model knows or cares where
-those came from.
+Turn telemetry off entirely and the plug still isn't useless: **`Timed`
+mode needs no state of charge at all** — it charges for the window and
+stops at the end of it, same physical guarantee, no projection involved.
+Losing the feed degrades the *precision* of the stop; it never touches the
+*safety* of it.
+
+PSACC is a good fit and it is what exists now, but it is not what makes any
+of this useful on its own. Everything above the source works on a
+*normalised snapshot*: a number, a "is it charging" flag, and a timestamp.
+Nothing in the projection, the stop, the staleness detection or the rate
+model knows or cares where those came from.
 
 Which means the source can be almost anything:
 
