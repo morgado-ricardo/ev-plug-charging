@@ -93,6 +93,10 @@
     "ev_plug_charging_aux_battery_critical": {
       "title": "EV 12V battery critically low",
       "description": "The 12V auxiliary battery's resting state of charge has fallen below 30% -- low enough that the car may soon fail to wake or crank. Drive it for 30+ minutes or connect a trickle charger."
+    },
+    "ev_plug_charging_power_mismatch": {
+      "title": "EV charging current may be misconfigured",
+      "description": "Configured charging current is {configured_a}A (~{configured_kw}kW), but the plug is measuring about {measured_a}A (~{measured_kw}kW). Check the configured amps in the integration's options against what the EVSE/granny cable is actually set to."
     }
   }
 }

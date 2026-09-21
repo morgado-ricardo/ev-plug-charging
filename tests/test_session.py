@@ -140,3 +140,49 @@ def test_new_charging_active_edge_after_prior_completion_is_a_new_session():
     )
     assert new_state.session_energy_kwh == 0.0
     assert new_state.complete_notified is False
+
+
+def test_new_session_clears_the_efficiency_calibration_pair():
+    """The pending (soc, energy) pair belongs to the session that just
+    ended -- a new session must not have its first energy delta measured
+    against a stale prior-session SoC snapshot."""
+    state = SessionState(
+        complete_notified=False,
+        session_energy_kwh=12.3,
+        calib_soc_first=50.0,
+        calib_energy_first=1.0,
+        calib_soc_last=65.0,
+        calib_energy_last=6.5,
+    )
+    inp = base_inputs().set(now=dt(22, 0)).build()
+    new_state = advance_session(
+        state, inp, charging_active=False, plug_on_edge=True, charging_active_edge=False,
+        fresh_reading_edge=False,
+    )
+    assert new_state.calib_soc_first is None
+    assert new_state.calib_energy_first is None
+    assert new_state.calib_soc_last is None
+    assert new_state.calib_energy_last is None
+
+
+def test_mid_session_flicker_does_not_clear_the_calibration_pair_r11():
+    """Same R11 flicker as test_charging_active_flicker_does_not_reset_meter
+    above, but for the calibration pair: not a new session, so the pair
+    must survive untouched."""
+    state = SessionState(
+        complete_notified=False,
+        session_energy_kwh=8.4,
+        calib_soc_first=40.0,
+        calib_energy_first=0.5,
+    )
+    inp = base_inputs().set(now=dt(2, 0)).build()
+    new_state = advance_session(
+        state,
+        inp,
+        charging_active=True,
+        plug_on_edge=False,
+        charging_active_edge=True,
+        fresh_reading_edge=False,
+    )
+    assert new_state.calib_soc_first == 40.0
+    assert new_state.calib_energy_first == 0.5

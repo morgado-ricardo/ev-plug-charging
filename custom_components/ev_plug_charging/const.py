@@ -92,11 +92,14 @@ DEFAULT_BATTERY_CAPACITY_KWH = 50.0
 DEFAULT_CHARGE_POWER_KW = 1.84
 DEFAULT_CHARGE_CURRENT_A = 8.0
 DEFAULT_CHARGE_EFFICIENCY = 0.82
-# Same value as DEFAULT_CHARGE_EFFICIENCY today -- deliberately NOT lowered
-# yet. A pessimistic default is only safe to ship alongside the calibration
-# that corrects it; until that lands, a lower default would just mean every
-# new install overshoots every night for no offsetting benefit.
-DEFAULT_EFFICIENCY_PRIOR = 0.82
+# Deliberately LOWER than DEFAULT_CHARGE_EFFICIENCY (0.82) was -- this is
+# now safe to ship pessimistic, because the self-calibration in
+# rate_model.py exists to correct it back up (bounded by EFFICIENCY_MAX_GAIN)
+# for anyone whose real setup beats it. A migrated entry is NOT affected:
+# async_migrate_entry carries its OLD tuned 0.82 forward into
+# CONF_EFFICIENCY_PRIOR unchanged -- this constant is the fresh-install
+# fallback only.
+DEFAULT_EFFICIENCY_PRIOR = 0.75
 SUPPLY_VOLTAGE_V = 230.0
 DEFAULT_POLL_INTERVAL_SECONDS = 120
 MIN_POLL_INTERVAL_SECONDS = 60
@@ -170,6 +173,51 @@ RATE_MODEL_MIN_SESSION_MINUTES = 45
 RATE_MODEL_MIN_SOC_GAIN = 10.0
 RATE_MODEL_CLAMP_LOW = 0.85
 RATE_MODEL_CLAMP_HIGH = 2.0
+
+# Efficiency self-calibration -- see rate_model.py's module docstring for
+# the full safety argument. Mirrors the rate-model constants above in
+# shape (same MIN_SAMPLES/SAMPLE_WINDOW pattern), deliberately: two
+# independent calibrations should not each invent their own vocabulary
+# for "how many samples before this is trusted".
+EFFICIENCY_MIN_SAMPLES = 3
+EFFICIENCY_SAMPLE_WINDOW = 5
+# A measurement outside this band is treated as a bad reading (a
+# mis-scaled sensor, a wrong capacity), not a real efficiency -- rejected
+# outright, never clamped into range. 0.95 is already an implausibly good
+# AC->battery conversion for a granny-cable/EVSE setup.
+EFFICIENCY_MIN_PLAUSIBLE = 0.50
+EFFICIENCY_MAX_PLAUSIBLE = 0.95
+# Applied to the aggregated (median) measurement before it's used, on top
+# of -- not instead of -- EFFICIENCY_MAX_GAIN below. Two independent
+# margins, not one: this one shrinks the INPUT to the seed calculation,
+# MAX_GAIN bounds its OUTPUT.
+EFFICIENCY_DERATE = 0.95
+# The one hard safety bound: the calibrated effective power (measured
+# power x calibrated efficiency) may never exceed the AS-CONFIGURED
+# effective power (configured amps x the prior) by more than this factor.
+# So the stop can never land more than 1 - 1/1.20 = 16.7% earlier than
+# what the user actually entered, no matter what the telemetry claims.
+EFFICIENCY_MAX_GAIN = 1.20
+# Below this paired energy delta, sensor quantisation dominates the
+# measurement -- same reasoning as RATE_MODEL_MIN_SOC_GAIN, for the
+# denominator instead of the numerator.
+EFFICIENCY_MIN_ENERGY_KWH = 1.0
+
+# Measured AC power (superseding the configured amps once available) --
+# see coordinator.py's per-tick sampling and rate_model.measured_ac_power_p90.
+# A p90 across many ticks, not an instant or a mean: resistant to a single
+# noisy reading without being dragged down by the CV taper the SoC gate
+# below already excludes.
+MEASURED_POWER_MIN_SAMPLES = 5
+MEASURED_POWER_SAMPLE_CAP = 200
+# "Comfortably below target" -- excludes the constant-voltage taper, where
+# power tapers off for reasons that have nothing to do with the configured
+# current and would otherwise bias the estimate low.
+MEASURED_POWER_TAPER_MARGIN_SOC = 5.0
+# Relative disagreement between measured and configured power that's
+# worth telling the user about (e.g. "you configured 8A, the plug reports
+# ~6.1A equivalent") rather than just quietly correcting for.
+MEASURED_POWER_DISAGREEMENT_THRESHOLD = 0.25
 
 # 12V auxiliary-battery health -- see aux_battery.py for the bands.
 AUX_BATTERY_HEALTHY_THRESHOLD = 70.0

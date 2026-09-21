@@ -17,7 +17,7 @@ hands it a `TelemetrySource`, and from then on it only asks for a normalised
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time as time_cls, timedelta
 from typing import Any, Optional
 
@@ -51,6 +51,9 @@ from .const import (
     DEFAULT_EFFICIENCY_PRIOR,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
+    MEASURED_POWER_DISAGREEMENT_THRESHOLD,
+    MEASURED_POWER_SAMPLE_CAP,
+    MEASURED_POWER_TAPER_MARGIN_SOC,
     STORE_KEY_TEMPLATE,
     STORE_VERSION,
     SUPPLY_VOLTAGE_V,
@@ -133,6 +136,20 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._monthly_energy_kwh: float = 0.0
         self._monthly_energy_month: Optional[int] = None
         self._lifetime_energy_kwh: float = 0.0
+        # Phase-2 efficiency calibration: the raw per-tick AC power
+        # readings feeding this session's measured_ac_power_p90 settlement
+        # (coordinator-side transient, same reasoning as
+        # _energy_baseline_kwh -- losing an in-progress session's samples
+        # on restart just means that one session doesn't update the
+        # measured power, not a safety issue).
+        self._power_samples: list[float] = []
+        # Set at session-completion time (see _maybe_record_session) to the
+        # stop reason record_efficiency_sample()'s accept_session() gate
+        # needs; cleared once a sample is recorded or the pair is reset by
+        # the next session. Coordinator-side and transient like the above
+        # -- see _try_record_efficiency_sample's docstring for why a
+        # one-shot attempt is not enough here.
+        self._pending_efficiency_stop_reason: Optional[str] = None
         self.settings = RuntimeSettings()
 
     @property
@@ -281,6 +298,8 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         prev_state = self._session_state
         new_state, decision = logic_mod.reduce(prev_state, inputs)
         new_state = self._track_energy(prev_state, new_state)
+        new_state = self._track_calibration_pair(prev_state, new_state, inputs)
+        self._sample_measured_power(inputs, decision)
         new_state, aux_reading, aux_events = aux_battery.advance_aux_battery(
             new_state,
             now,
@@ -288,17 +307,24 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             at_rest=not decision.charging_active,
         )
         self._session_state = new_state
+        # Retried every tick (cheap no-op when nothing is pending): a late
+        # SoC reading can complete the calibration pair on a tick that has
+        # nothing else to do with a since-completed session -- see
+        # _try_record_efficiency_sample's docstring.
+        self._try_record_efficiency_sample()
         self.last_decision = decision
         self.last_aux_battery = aux_reading
-        self._log_decision(now, inputs, new_state, decision, window_open_edge, window_close_edge)
+        self._log_decision(
+            now, inputs, self._session_state, decision, window_open_edge, window_close_edge
+        )
 
-        await self._act_on_decision(prev_state, new_state, decision, inputs, aux_events)
-        await self._store.async_save(store_mod.to_dict(new_state))
+        await self._act_on_decision(prev_state, self._session_state, decision, inputs, aux_events)
+        await self._store.async_save(store_mod.to_dict(self._session_state))
 
         return {
             "telemetry": self._telemetry,
             "decision": decision,
-            "state": new_state,
+            "state": self._session_state,
             "aux_battery": aux_reading,
         }
 
@@ -495,11 +521,14 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _track_energy(self, prev_state, new_state):
         """Session/monthly/lifetime kWh from the plug's raw cumulative
-        energy sensor. Metering only, never an input to a decision -- see
-        the note on _energy_baseline_kwh in __init__ for why this lives
-        outside SessionState/logic.reduce()."""
-        from dataclasses import replace as _replace
-
+        energy sensor. Never an input to a LIVE decision -- see the note
+        on _energy_baseline_kwh in __init__ for why this lives outside
+        SessionState/logic.reduce(). No longer "metering only" as of
+        Phase 2, though: at session-completion time, under
+        accept_session()'s gates, session_energy_kwh contributes one
+        bounded efficiency sample (see _try_record_efficiency_sample and
+        rate_model.record_efficiency_sample) -- bounded by
+        EFFICIENCY_MAX_GAIN, never a direct actuation input."""
         entity_id = self.entry.data.get(CONF_PLUG_ENERGY_SENSOR) or self.entry.options.get(
             CONF_PLUG_ENERGY_SENSOR
         )
@@ -513,7 +542,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # WHETHER this tick starts a new session, and that decision is
         # encoded as session_energy_kwh being reset to 0.0 in the state
         # `logic_mod.reduce()` just returned (before this method's own
-        # _replace() below overwrites it with the real computed value).
+        # replace() below overwrites it with the real computed value).
         # Re-deriving "is this a new session?" independently here, e.g.
         # from charge_started_at changing, would drift from that decision
         # -- charge_started_at moves on every charging_active edge, not
@@ -526,6 +555,11 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if just_reset or self._energy_baseline_kwh is None:
             self._energy_baseline_kwh = raw
+        if just_reset:
+            # The measured-power samples feeding this session's p90 belong
+            # to whatever session was open when they were taken -- see
+            # _sample_measured_power.
+            self._power_samples = []
 
         session_kwh = max(0.0, raw - self._energy_baseline_kwh)
         delta_since_last = max(0.0, session_kwh - prev_state.session_energy_kwh)
@@ -537,7 +571,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._monthly_energy_kwh += delta_since_last
         self._lifetime_energy_kwh += delta_since_last
 
-        return _replace(new_state, session_energy_kwh=session_kwh)
+        return replace(new_state, session_energy_kwh=session_kwh)
 
     @property
     def monthly_energy_kwh(self) -> float:
@@ -568,6 +602,185 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._session_state = rate_model.record_session(self._session_state, session)
 
+        # Efficiency calibration: the pair _track_calibration_pair has
+        # captured so far may not be complete -- a late SoC report can
+        # land hours after this session ended (see rate_model.py's module
+        # docstring). Remember the stop reason so later ticks keep
+        # retrying record_efficiency_sample against the pair as it grows,
+        # rather than judging it on whatever it holds this one tick.
+        self._pending_efficiency_stop_reason = decision.reason
+        self._try_record_efficiency_sample()
+        self._settle_measured_power()
+
+    def _try_record_efficiency_sample(self) -> None:
+        """Attempt to close out the pending efficiency measurement against
+        the CURRENT calibration pair.
+
+        Unlike rate-sample recording, this cannot be a one-shot call made
+        only at session-completion time: the pair's second reading
+        (calib_soc_last) can arrive on a tick well after the session
+        completed -- the sparse-telemetry case rate_model.py's module
+        docstring documents (anchor captured, car goes silent for hours,
+        one reading lands after the charge already stopped). So this is
+        called every tick; it is a cheap no-op whenever nothing is
+        pending.
+        """
+        if self._pending_efficiency_stop_reason is None:
+            return
+        state = self._session_state
+        if state.charge_started_at is None or state.anchor.soc is None:
+            self._pending_efficiency_stop_reason = None
+            return
+        if state.calib_soc_first is None:
+            # session.py already reset the pair for a new session --
+            # nothing left of the old one to retry.
+            self._pending_efficiency_stop_reason = None
+            return
+        if state.calib_soc_last is None:
+            return  # still waiting for a second fresh reading
+
+        capacity = self.entry.options.get(
+            CONF_BATTERY_CAPACITY_KWH,
+            self.entry.data.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH),
+        )
+        prior = self.entry.data.get(CONF_EFFICIENCY_PRIOR, DEFAULT_EFFICIENCY_PRIOR)
+        working_before = rate_model.working_efficiency(state.efficiency_samples, prior)
+
+        # This CompletedSession is built fresh from persisted SessionState,
+        # not the original completion tick's Inputs/Decision -- those
+        # aren't available on a later retry tick. soc_gained is recomputed
+        # against the anchor the same way _maybe_record_session's own copy
+        # is; duration_minutes only has to clear the MIN_SESSION_MINUTES
+        # floor, so measuring it against "now" (which only grows on a
+        # retry) is safe. record_efficiency_sample() does not use either
+        # field for the measurement itself -- see its docstring.
+        session = rate_model.CompletedSession(
+            duration_minutes=(dt_util.now() - state.charge_started_at).total_seconds() / 60.0,
+            soc_gained=state.calib_soc_last - state.anchor.soc,
+            stayed_on_plug=state.session_stayed_on_plug,
+            ran_above_target=state.session_ran_above_target,
+            anchor_provisional_unresolved=state.anchor.provisional,
+            stop_reason=self._pending_efficiency_stop_reason,
+        )
+        before_count = len(state.efficiency_samples)
+        new_state = rate_model.record_efficiency_sample(state, session, capacity)
+        self._session_state = new_state
+        if len(new_state.efficiency_samples) > before_count:
+            self._pending_efficiency_stop_reason = None
+            working_after = rate_model.working_efficiency(new_state.efficiency_samples, prior)
+            if working_after != working_before:
+                _LOGGER.info(
+                    "Working charge efficiency changed: %.3f -> %.3f (%d samples)",
+                    working_before,
+                    working_after,
+                    len(new_state.efficiency_samples),
+                )
+
+    def _settle_measured_power(self) -> None:
+        """Called once, at session-completion time: settle this session's
+        p90 measured AC power and check it against the configured amps.
+        Unlike the efficiency sample, this never needs a retry --
+        _sample_measured_power only appends while charging_active, which
+        is already false by the time a session completes."""
+        p90 = rate_model.measured_ac_power_p90(tuple(self._power_samples))
+        if p90 is None:
+            return
+        self._session_state = replace(self._session_state, measured_ac_power_kw=p90)
+
+        current_a = self.entry.options.get(
+            CONF_CHARGE_CURRENT_A, self.entry.data.get(CONF_CHARGE_CURRENT_A, DEFAULT_CHARGE_CURRENT_A)
+        )
+        configured_kw = current_a * SUPPLY_VOLTAGE_V / 1000.0
+        if configured_kw <= 0:
+            return
+        disagreement = abs(p90 - configured_kw) / configured_kw
+        if disagreement > MEASURED_POWER_DISAGREEMENT_THRESHOLD:
+            self._async_raise_power_mismatch_repair(current_a, configured_kw, p90)
+        else:
+            self._async_clear_power_mismatch_repair()
+
+    def _power_mismatch_issue_id(self) -> str:
+        # Same shape as notify.py's _repair_id: <entry_id>_<translation_key>.
+        return f"{self.entry.entry_id}_{DOMAIN}_power_mismatch"
+
+    def _async_raise_power_mismatch_repair(
+        self, configured_a: float, configured_kw: float, measured_kw: float
+    ) -> None:
+        try:
+            from homeassistant.helpers import issue_registry as ir
+        except ImportError:
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            self._power_mismatch_issue_id(),
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=f"{DOMAIN}_power_mismatch",
+            translation_placeholders={
+                "configured_a": f"{configured_a:.1f}",
+                "configured_kw": f"{configured_kw:.2f}",
+                "measured_kw": f"{measured_kw:.2f}",
+                "measured_a": f"{measured_kw * 1000.0 / SUPPLY_VOLTAGE_V:.1f}",
+            },
+        )
+
+    def _async_clear_power_mismatch_repair(self) -> None:
+        try:
+            from homeassistant.helpers import issue_registry as ir
+        except ImportError:
+            return
+        ir.async_delete_issue(self.hass, DOMAIN, self._power_mismatch_issue_id())
+
+    def _sample_measured_power(self, inputs: Inputs, decision: logic_mod.Decision) -> None:
+        """Accumulate this tick's plug power reading toward the session's
+        p90 measured AC power (settled at completion -- see
+        _settle_measured_power), while it's actually representative of the
+        configured current: only while charging_active, above the same
+        delivering-power floor logic.py uses to call power "flowing" at
+        all, and comfortably below target. The constant-voltage taper
+        tapers power off for reasons unrelated to the configured current
+        and would otherwise bias the estimate low."""
+        if not decision.charging_active:
+            return
+        if inputs.plug_power_w is None or inputs.plug_power_w <= inputs.power_threshold_w:
+            return
+        if (
+            inputs.soc is not None
+            and inputs.soc >= inputs.target_soc - MEASURED_POWER_TAPER_MARGIN_SOC
+        ):
+            return
+        self._power_samples.append(inputs.plug_power_w / 1000.0)
+        if len(self._power_samples) > MEASURED_POWER_SAMPLE_CAP:
+            del self._power_samples[: len(self._power_samples) - MEASURED_POWER_SAMPLE_CAP]
+
+    def _track_calibration_pair(self, prev_state, new_state, inputs: Inputs):
+        """Snapshot (soc, session_energy_kwh) on each genuinely fresh SoC
+        reading -- the matched pair record_efficiency_sample() measures
+        between. Same freshness test session.py's anchor correction uses
+        (inp.soc_changed_at != the PRE-reduce state's prev_soc_changed_at)
+        -- not a second freshness rule.
+
+        Keeps updating calib_soc_last/calib_energy_last even after the
+        session has completed: session_energy_kwh has already stopped
+        moving by then, so a reading that lands hours later still pairs
+        correctly against the full session's energy -- see rate_model.py's
+        module docstring, the sparse-telemetry case that justifies this
+        over session totals. Only session.py's new_session reset, on the
+        NEXT session's plug_on_edge, ends this session's window.
+        """
+        if new_state.charge_started_at is None:
+            return new_state
+        if inputs.soc is None or inputs.soc_changed_at == prev_state.prev_soc_changed_at:
+            return new_state
+        if new_state.calib_soc_first is None:
+            return replace(
+                new_state, calib_soc_first=inputs.soc, calib_energy_first=new_state.session_energy_kwh
+            )
+        return replace(
+            new_state, calib_soc_last=inputs.soc, calib_energy_last=new_state.session_energy_kwh
+        )
+
     def _effective_rate(self) -> RateSnapshot:
         capacity = self.entry.options.get(
             CONF_BATTERY_CAPACITY_KWH,
@@ -581,8 +794,16 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # there is no form field to write one there. entry.data is still
         # checked, since that is where async_migrate_entry writes a
         # migrated entry's carried-forward value.
-        efficiency = self.entry.data.get(CONF_EFFICIENCY_PRIOR, DEFAULT_EFFICIENCY_PRIOR)
-        seed = rate_model.seed_rate_from_amps(capacity, current_a, SUPPLY_VOLTAGE_V, efficiency)
+        prior = self.entry.data.get(CONF_EFFICIENCY_PRIOR, DEFAULT_EFFICIENCY_PRIOR)
+        working = rate_model.working_efficiency(self._session_state.efficiency_samples, prior)
+        seed = rate_model.seed_rate_calibrated(
+            capacity,
+            current_a,
+            SUPPLY_VOLTAGE_V,
+            prior,
+            self._session_state.measured_ac_power_kw,
+            working,
+        )
         return rate_model.effective_rate(self._session_state.rate_samples, seed)
 
     # -- small entity/config helpers ---------------------------------------

@@ -190,6 +190,28 @@ class SessionState:
     session_ran_above_target: bool = False
     session_stayed_on_plug: bool = True
 
+    # -- efficiency self-calibration (rate_model.py). Analogous to
+    # rate_samples above -- a learned-parameter buffer, so it lives here
+    # (persisted through store.py) rather than coordinator-side the way
+    # the raw energy-meter BASELINE does, the same distinction that
+    # already applies to session_energy_kwh vs coordinator._energy_baseline_kwh. --
+    efficiency_samples: tuple[float, ...] = field(default_factory=tuple)
+    # The in-flight pair for the CURRENT session: the first and the most
+    # recent genuinely fresh (soc, session_energy_kwh) reading. Reset
+    # alongside session_energy_kwh/session_saw_power in session.py's
+    # new_session branch. Persisted deliberately -- an overnight session
+    # routinely spans a restart, and losing the pair would mean that
+    # whole night's charge never contributes a sample.
+    calib_soc_first: Optional[float] = None
+    calib_energy_first: Optional[float] = None
+    calib_soc_last: Optional[float] = None
+    calib_energy_last: Optional[float] = None
+    # The last settled measured-AC-power estimate (a p90 across a
+    # completed session's healthy-delivery ticks -- see
+    # coordinator._sample_measured_power). None until at least one session
+    # has completed with enough qualifying samples.
+    measured_ac_power_kw: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class Inputs:
