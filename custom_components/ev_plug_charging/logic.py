@@ -250,17 +250,31 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     plug_delivering = (inp.plug_power_w or 0.0) > inp.power_threshold_w
     # With from_cache=1, a car-status of "charging" can be a cached value
     # that has not been refreshed in a while. Trusting it indefinitely would
-    # let charging_active latch on long after the car actually stopped and
-    # suppress the power-drop completion forever. Gate it on the SAME
-    # freshness clock and threshold the rescue wakeup uses (2x the expected
-    # reporting gap): past that point the feed is already known to be
-    # unhealthy, and a cached "charging" that old is no more trustworthy
-    # than no reading at all. Below it, trust it.
+    # let a stale "charging" misclassify charge_source (as BYPASS) and
+    # keep the charge-started notification asserted long after the car
+    # actually stopped. Gate it on the SAME freshness clock and threshold
+    # the rescue wakeup uses (2x the expected reporting gap): past that
+    # point the feed is already known to be unhealthy, and a cached
+    # "charging" that old is no more trustworthy than no reading at all.
+    # Below it, trust it.
     car_status_fresh = inp.soc_changed_at is not None and (
         inp.now - inp.soc_changed_at
     ) <= timedelta(minutes=inp.expected_gap_min * RESCUE_WAKEUP_GAP_MULTIPLE)
     car_charging = inp.car_charging and car_status_fresh
-    charging_active = car_charging or plug_delivering
+    # OUR plug's power draw is the sole authority on whether a charge is
+    # happening on OUR plug -- it gates session start (session.py's
+    # charging_active_edge), the projection (projected_soc), and every
+    # completion path below. The car's own reported status is real
+    # evidence of a charge (used for charge_source/bypass detection and
+    # the charge-started/car-finished notifications, both below) but it is
+    # NOT evidence about our plug specifically: an API that latches
+    # "InProgress" with nothing plugged into our socket must never drive
+    # our projection to a false target_reached, or our own plug-on into a
+    # false "power dropped, charge complete". Both happened for real: a
+    # charge window opened, the car's cached status alone made the plug
+    # look "active" with zero current flowing, and 5 minutes later the
+    # power-drop branch below reported the (non-existent) charge complete.
+    charging_active = plug_delivering
     charge_source = classify_source(car_charging, plug_delivering)
 
     plug_on_edge = inp.plug_switch_on and not state.prev_plug_switch_on
@@ -297,6 +311,13 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         charging_active_edge=charging_active_edge,
         fresh_reading_edge=fresh_reading_edge,
     )
+    # Sticky-OR within the session: once true, stays true until
+    # advance_session's new_session branch resets it. Runs AFTER
+    # advance_session so a session that starts with power already flowing
+    # (e.g. a restart mid-charge) is not left crediting a reset it just
+    # received.
+    if plug_delivering:
+        state = replace(state, session_saw_power=True)
 
     if plug_on_edge:
         state = replace(
@@ -453,6 +474,12 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         and not plug_delivering
         and held * 60 >= POWER_DROP_COMPLETE_DWELL_SECONDS
         and not state.complete_notified
+        # "Power stopped" is only evidence of a finished charge if power
+        # actually started -- without this, turning the plug on with
+        # nothing plugged in reports a completed charge 5 minutes later
+        # (session_saw_power stays False the whole time; see its
+        # docstring in models.py for the incident this guards against).
+        and state.session_saw_power
     ):
         events.append(
             Event(

@@ -47,7 +47,7 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/{notify,repairs,diagnostics,services}.py` | Event dispatch, Repairs, the diagnostics download, the services. | Yes |
 | `custom_components/ev_plug_charging/logbook.py` | Describes `EVENT_PLUG_COMMANDED` for Home Assistant's logbook -- an integration platform, discovered via `manifest.json`'s `after_dependencies`, not an entity platform. | Yes |
 | `custom_components/ev_plug_charging/__init__.py` | `async_setup_entry`, `async_migrate_entry`, platform wiring. | Deferred |
-| `tests/test_scenarios.py` | R1–R14: the regression acceptance gate. | None |
+| `tests/test_scenarios.py` | R1–R15: the regression acceptance gate. | None |
 | `tests/test_*.py` (most others) | Unit tests for the pure core. | None |
 | `tests/test_integration_setup.py` | Config flow, coordinator, entity platforms against real Home Assistant. | Yes |
 | `tests/test_dashboard_examples.py` | Parses `dashboard*.yaml` and the platform modules; fails if a dashboard entity ID doesn't match an entity this integration actually creates. | None |
@@ -77,11 +77,18 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   paths computing "are we in the window" independently (the tick vs. a
   boundary callback) can momentarily disagree. `reduce()` always re-derives
   the window fresh from timestamps.
+- **OUR plug's power draw is the sole authority on `charging_active`** --
+  never the car's own reported status alone. The car's status is real
+  evidence for `charge_source`/bypass detection and for notifications, but
+  a cached "charging" with nothing plugged into our socket must never
+  start a session, advance the projection, or complete one on its own
+  (R15: this happened -- a stale API status turned an empty charge window
+  into a false "charge complete" five minutes after it opened).
 - **The learned rate may only push the stop later, never earlier:**
   `effective_rate = max(learned, seed)`. An unclamped fast-biased rate stops
   a charge short of what was asked. This has happened — a session stopped 26
   points short of target — and the clamp is why it can't again.
-- **`tests/test_scenarios.py` (R1–R14) is the acceptance gate** for any
+- **`tests/test_scenarios.py` (R1–R15) is the acceptance gate** for any
   change to `logic.py`, `session.py` or `rate_model.py`. Every scenario in
   it is a real failure that already happened once. A scenario is never
   edited to make a change pass; if one is genuinely wrong, that's a

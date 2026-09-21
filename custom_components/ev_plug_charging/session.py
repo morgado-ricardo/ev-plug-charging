@@ -43,7 +43,12 @@ def advance_session(
         # the ongoing session, so new_session is False and nothing resets.
         new_session = plug_on_edge or state.complete_notified
         if new_session:
-            state = replace(state, session_energy_kwh=0.0, complete_notified=False)
+            state = replace(
+                state,
+                session_energy_kwh=0.0,
+                session_saw_power=False,
+                complete_notified=False,
+            )
 
     # -- anchor capture: only on the instant current actually starts
     # flowing, never on plug-on -- a cable can sit connected for an hour

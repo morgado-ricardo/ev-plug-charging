@@ -82,6 +82,15 @@ class SessionState:
     anchor: SessionAnchor = field(default_factory=SessionAnchor)
     charge_started_at: Optional[datetime] = None
     session_energy_kwh: float = 0.0
+    # Whether OUR plug has delivered power at any point in this session.
+    # The power-drop completion path ("plug on, power stopped") is only
+    # evidence of a finished charge if a charge actually started on this
+    # plug -- otherwise "power stopped" is vacuously true from the moment
+    # the plug is switched on with nothing plugged in. Reset alongside
+    # session_energy_kwh; defaults False, the safe direction (worst case
+    # a restart mid-session delays completion by one tick, not spuriously
+    # completes an empty session).
+    session_saw_power: bool = False
 
     # -- plug ownership --
     plug_turned_on_by: Owner = Owner.UNKNOWN

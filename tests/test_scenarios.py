@@ -610,3 +610,121 @@ def test_r14_window_close_notifies_in_timed_mode_too():
     state, decision = reduce(state, inp)
     assert decision.plug == PlugAction.OFF
     assert any(e.name.endswith("window_shortfall") for e in decision.events)
+
+
+# --------------------------------------------------------------------------- #
+# R15: window opens with nothing plugged in -> false "charge complete" at
+# window_open + 5 min (2026-09-20). Two independent paths produced this:
+# car status alone ("InProgress", cached, nothing plugged into our socket)
+# could drive charging_active and the projection to a false target_reached;
+# and separately, "plug on + no power for 5 min" was read as "the charge
+# that was never there just finished" regardless of whether one had ever
+# started. Both are now gated on OUR plug's own power draw.
+# --------------------------------------------------------------------------- #
+
+
+def test_r15_plug_armed_with_nothing_plugged_in_does_not_complete():
+    """The exact incident, driven tick by tick the way the coordinator
+    would: below_target turns the plug on at window-open, nothing is
+    plugged in, and POWER_DROP_COMPLETE_DWELL_SECONDS (5 min) of "on, no
+    power" must NOT be read as a finished charge -- there was no charge to
+    finish. A car status of "InProgress" alone (stale/cached, common on
+    this source) must not manufacture one either.
+
+    Three ticks, because the dwell clock (logic._dwell) only starts
+    counting from the tick that first observes the condition -- a single
+    time-jump would read `held == 0` regardless of whether the fix is
+    applied, and silently test nothing."""
+    window_open_at = dt(23, 0)
+    state = SessionState()
+
+    # Tick 1: window opens, nothing plugged in yet, plug not actuated.
+    inp_open = base_inputs().set(
+        now=window_open_at,
+        window_open_edge=True,
+        soc=55.0,
+        soc_changed_at=window_open_at,
+        plug_switch_on=False,
+        car_charging=False,
+        plug_power_w=0.0,
+        rate=RATE,
+    ).build()
+    state, decision = reduce(state, inp_open)
+    assert decision.plug == PlugAction.ON
+    assert decision.reason == "below_target"
+
+    # Tick 2: the coordinator has now actuated the plug; the "on, no
+    # power" dwell clock starts here. The car's own API keeps reporting
+    # "charging" -- exactly the observed cause of the OTHER half of the
+    # incident (charging_active driven by car status alone).
+    plug_observed_on_at = window_open_at + timedelta(seconds=30)
+    inp_on = base_inputs().set(
+        now=plug_observed_on_at,
+        soc=55.0,
+        soc_changed_at=window_open_at,  # unchanged: no fresh reading
+        plug_switch_on=True,
+        car_charging=True,  # the car's API, latched
+        plug_power_w=0.0,  # nothing actually plugged into OUR socket
+        rate=RATE,
+    ).build()
+    state, decision = reduce(state, inp_on)
+    assert decision.charge_source == ChargeSource.BYPASS  # car status alone
+    assert decision.charging_active is False
+    assert state.session_saw_power is False
+
+    # Tick 3: five minutes and one second later -- past
+    # POWER_DROP_COMPLETE_DWELL_SECONDS. This is the tick that fired the
+    # false completion in the real incident (23:00 + 5 min = 23:05).
+    stale_charging_at = plug_observed_on_at + timedelta(minutes=5, seconds=1)
+    inp_stale = base_inputs().set(
+        now=stale_charging_at,
+        soc=55.0,
+        soc_changed_at=window_open_at,
+        plug_switch_on=True,
+        car_charging=True,
+        plug_power_w=0.0,
+        rate=RATE,
+    ).build()
+    state, decision = reduce(state, inp_stale)
+    assert not any(e.name.endswith("charge_complete") for e in decision.events)
+    assert state.complete_notified is False
+    assert decision.plug == PlugAction.ON  # below_target keeps re-asserting
+    assert decision.reason == "below_target"
+
+
+def test_r15_the_window_still_charges_once_the_car_arrives():
+    """Continuing the same window: the car is plugged in at 02:00, three
+    hours after the window opened empty. The session must start FROM
+    02:00 (this is R4's guarantee, re-proven under R15's setup) and charge
+    normally -- an empty first stretch must not poison the rest of the
+    window."""
+    window_open_at = dt(23, 0)
+    state = SessionState()
+    inp_open = base_inputs().set(
+        now=window_open_at,
+        window_open_edge=True,
+        soc=55.0,
+        soc_changed_at=window_open_at,
+        plug_switch_on=False,
+        car_charging=False,
+        plug_power_w=0.0,
+        rate=RATE,
+    ).build()
+    state, _ = reduce(state, inp_open)
+
+    plug_in_at = window_open_at + timedelta(hours=3)
+    inp_plug_in = base_inputs().set(
+        now=plug_in_at,
+        soc=55.0,
+        soc_changed_at=plug_in_at,
+        plug_switch_on=True,
+        car_charging=True,
+        plug_power_w=1800.0,
+        rate=RATE,
+    ).build()
+    state, decision = reduce(state, inp_plug_in)
+    assert state.charge_started_at == plug_in_at  # NOT window_open_at
+    assert decision.charging_active is True
+    assert decision.charge_source == ChargeSource.PLUG
+    assert decision.plug == PlugAction.ON
+    assert decision.reason == "below_target"

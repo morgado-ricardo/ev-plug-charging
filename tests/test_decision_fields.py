@@ -1,7 +1,11 @@
-"""Decision.plug_delivering: just the plug's own contribution to
-charging_active, exposed on its own for binary_sensor.*_plug_delivering_power
--- useful when diagnosing an EVSE that's on but drawing nothing, without
-also having to check whether the car agrees it's charging.
+"""Decision.plug_delivering: whether OUR plug is drawing current, exposed
+on its own for binary_sensor.*_plug_delivering_power -- useful when
+diagnosing an EVSE that's on but drawing nothing, without also having to
+check whether the car agrees it's charging.
+
+Also pins that plug_delivering IS charging_active (plug power is the sole
+authority on whether a charge is happening on our plug) -- car status
+alone is not, see test_bypass_leaves_charging_active_and_plug_delivering_false.
 """
 from __future__ import annotations
 
@@ -39,15 +43,21 @@ def test_plug_delivering_false_when_power_is_below_the_threshold():
     assert d.plug_delivering is False
 
 
-def test_plug_delivering_can_be_true_while_charge_source_is_bypass():
-    """charging_active is car_charging OR plug_delivering -- a bypass
-    session (car charging, plug never involved) has plug_delivering False
-    even though charging_active is True."""
+def test_bypass_leaves_charging_active_and_plug_delivering_false():
+    """OUR plug's power draw is the sole authority on charging_active -- a
+    bypass session (car charging, plug never involved) is still classified
+    BYPASS (classify_source takes car_charging and plug_delivering
+    independently) but must NOT drive charging_active, the projection, or
+    a plug-side completion. Pins the incident this guards against: a car
+    API latching "charging" with nothing plugged into our socket used to
+    make charging_active true on car status alone, which could drive the
+    projection to a false target_reached."""
     _, d = _tick(
         SessionState(),
         car_charging=True,
         plug_switch_on=False,
         plug_power_w=0.0,
     )
-    assert d.charging_active is True
+    assert d.charging_active is False
     assert d.plug_delivering is False
+    assert d.charge_source.value == "bypass"
