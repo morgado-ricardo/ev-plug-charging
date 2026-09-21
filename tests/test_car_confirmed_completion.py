@@ -221,3 +221,18 @@ def test_store_codec_defaults_are_safe_for_missing_data():
     restored2 = from_dict({})
     assert restored2.prev_car_charging is False
     assert restored2.last_charge_source == ChargeSource.NONE
+
+
+def test_session_saw_power_round_trips_and_defaults_false():
+    """session_saw_power gates the power-drop completion (R15) -- an
+    overnight session routinely spans a restart, and losing this flag
+    would let a false "charge complete" back in on restart even with
+    the R15 fix in place. False is the safe missing-data default: the
+    worst case is a one-tick delay before completion is trusted again,
+    never a spurious completion."""
+    state = SessionState(session_saw_power=True)
+    restored = from_dict(to_dict(state))
+    assert restored.session_saw_power is True
+
+    assert from_dict(None).session_saw_power is False
+    assert from_dict({}).session_saw_power is False
