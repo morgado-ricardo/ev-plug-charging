@@ -93,6 +93,10 @@
     "ev_plug_charging_aux_battery_critical": {
       "title": "Bateria de 12V EV criticamente fraca",
       "description": "O estado de carga em repouso da bateria auxiliar de 12V caiu abaixo dos 30% -- suficientemente baixo para o carro poder falhar ao acordar ou arrancar em breve. Conduz durante 30+ minutos ou liga um carregador lento."
+    },
+    "ev_plug_charging_power_mismatch": {
+      "title": "Corrente de carregamento EV pode estar mal configurada",
+      "description": "A corrente de carregamento configurada é {configured_a}A (~{configured_kw}kW), mas a tomada está a medir cerca de {measured_a}A (~{measured_kw}kW). Verifica os amperes configurados nas opções da integração contra o que o EVSE/cabo está realmente definido."
     }
   }
 }

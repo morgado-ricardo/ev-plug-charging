@@ -14,7 +14,21 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from . import rate_model
-from .const import CONF_PSACC_URL, CONF_SOURCE_TYPE, CONF_VIN, DOMAIN
+from .const import (
+    CONF_BATTERY_CAPACITY_KWH,
+    CONF_CHARGE_CURRENT_A,
+    CONF_EFFICIENCY_PRIOR,
+    CONF_PSACC_URL,
+    CONF_SOURCE_TYPE,
+    CONF_VIN,
+    DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_CHARGE_CURRENT_A,
+    DEFAULT_EFFICIENCY_PRIOR,
+    DOMAIN,
+    EFFICIENCY_MAX_GAIN,
+    EFFICIENCY_MIN_SAMPLES,
+    SUPPLY_VOLTAGE_V,
+)
 from .coordinator import EvPlugChargingCoordinator
 from .store import to_dict
 
@@ -35,18 +49,36 @@ async def async_get_config_entry_diagnostics(
     # one legitimate reason to reach into coordinator internals; there is
     # no other consumer of the raw persisted state.
 
+    capacity = entry.options.get(
+        CONF_BATTERY_CAPACITY_KWH, entry.data.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
+    )
+    current_a = entry.options.get(
+        CONF_CHARGE_CURRENT_A, entry.data.get(CONF_CHARGE_CURRENT_A, DEFAULT_CHARGE_CURRENT_A)
+    )
+    prior = entry.data.get(CONF_EFFICIENCY_PRIOR, DEFAULT_EFFICIENCY_PRIOR)
+    working = rate_model.working_efficiency(state.efficiency_samples, prior)
+
     seed = None
+    seed_configured = None
     learned = None
     try:
-        seed = rate_model.seed_rate_from_amps(
-            entry.options.get("battery_capacity_kwh", entry.data.get("battery_capacity_kwh", 50.0)),
-            entry.options.get("charge_current_a", entry.data.get("charge_current_a", 8.0)),
-            230.0,
-            entry.data.get("efficiency_prior", 0.82),
+        seed_configured = rate_model.seed_rate_from_amps(capacity, current_a, SUPPLY_VOLTAGE_V, prior)
+        seed = rate_model.seed_rate_calibrated(
+            capacity, current_a, SUPPLY_VOLTAGE_V, prior, state.measured_ac_power_kw, working
         )
         learned = rate_model.learned_rate(state.rate_samples)
     except (ValueError, ZeroDivisionError):
         pass
+
+    # Whether EFFICIENCY_MAX_GAIN is currently the binding constraint on
+    # the calibrated seed, i.e. the calibration is being held back by the
+    # cap rather than by the measured evidence itself -- see
+    # rate_model.seed_rate_calibrated's docstring.
+    gain_capped = (
+        seed is not None
+        and seed_configured is not None
+        and seed <= seed_configured / EFFICIENCY_MAX_GAIN * 1.0001
+    )
 
     last_decision = coordinator.last_decision
 
@@ -75,9 +107,29 @@ async def async_get_config_entry_diagnostics(
         },
         "rate_model": {
             "seed_minutes_per_percent": seed,
+            "seed_configured_minutes_per_percent": seed_configured,
             "learned_minutes_per_percent": learned,
             "sample_count": len(state.rate_samples),
             "samples": list(state.rate_samples),
+        },
+        "efficiency_calibration": {
+            "efficiency_prior": prior,
+            "efficiency_working": working,
+            "efficiency_source": (
+                "prior"
+                if len(state.efficiency_samples) < EFFICIENCY_MIN_SAMPLES
+                else "calibrated"
+            ),
+            "sample_count": len(state.efficiency_samples),
+            "samples": list(state.efficiency_samples),
+            "measured_ac_power_kw": state.measured_ac_power_kw,
+            "max_gain_binding": gain_capped,
+            "pending_calibration_pair": {
+                "soc_first": state.calib_soc_first,
+                "energy_first_kwh": state.calib_energy_first,
+                "soc_last": state.calib_soc_last,
+                "energy_last_kwh": state.calib_energy_last,
+            },
         },
         "last_decision": {
             "plug": last_decision.plug.value if last_decision else None,

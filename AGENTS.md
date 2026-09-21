@@ -88,6 +88,14 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   `effective_rate = max(learned, seed)`. An unclamped fast-biased rate stops
   a charge short of what was asked. This has happened — a session stopped 26
   points short of target — and the clamp is why it can't again.
+- **Efficiency self-calibration may only push the stop later than the
+  as-configured setup by more than `EFFICIENCY_MAX_GAIN` (1.20), never
+  earlier:** `seed_rate_calibrated()` enforces this structurally, the same
+  way `effective_rate` enforces its own bound. `session_energy_kwh` is no
+  longer "metering only" — at session-completion time, under
+  `accept_session()`'s gates, it contributes one bounded sample toward the
+  working efficiency (`rate_model.record_efficiency_sample`) — but it still
+  never feeds a live actuation decision directly.
 - **`tests/test_scenarios.py` (R1–R15) is the acceptance gate** for any
   change to `logic.py`, `session.py` or `rate_model.py`. Every scenario in
   it is a real failure that already happened once. A scenario is never

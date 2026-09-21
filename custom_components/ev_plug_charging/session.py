@@ -48,6 +48,18 @@ def advance_session(
                 session_energy_kwh=0.0,
                 session_saw_power=False,
                 complete_notified=False,
+                # The efficiency-calibration pair belongs to the session
+                # that just ended. This reset only ever fires on the NEXT
+                # session's plug_on_edge (complete_notified alone is not
+                # enough here -- a flicker leaves it False, same as
+                # above), which is always a later tick than the one where
+                # complete_notified itself flipped True and
+                # rate_model.record_efficiency_sample() read the pair --
+                # so that read never races this reset.
+                calib_soc_first=None,
+                calib_energy_first=None,
+                calib_soc_last=None,
+                calib_energy_last=None,
             )
 
     # -- anchor capture: only on the instant current actually starts

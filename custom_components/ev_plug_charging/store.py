@@ -75,6 +75,12 @@ def to_dict(state: SessionState) -> dict[str, Any]:
         "last_charge_source": state.last_charge_source.value,
         "session_ran_above_target": state.session_ran_above_target,
         "session_stayed_on_plug": state.session_stayed_on_plug,
+        "efficiency_samples": list(state.efficiency_samples),
+        "calib_soc_first": state.calib_soc_first,
+        "calib_energy_first": state.calib_energy_first,
+        "calib_soc_last": state.calib_soc_last,
+        "calib_energy_last": state.calib_energy_last,
+        "measured_ac_power_kw": state.measured_ac_power_kw,
     }
 
 
@@ -157,4 +163,10 @@ def from_dict(data: dict[str, Any] | None) -> SessionState:
         last_charge_source=last_charge_source,
         session_ran_above_target=bool(data.get("session_ran_above_target", False)),
         session_stayed_on_plug=bool(data.get("session_stayed_on_plug", True)),
+        efficiency_samples=tuple(data.get("efficiency_samples", [])),
+        calib_soc_first=data.get("calib_soc_first"),
+        calib_energy_first=data.get("calib_energy_first"),
+        calib_soc_last=data.get("calib_soc_last"),
+        calib_energy_last=data.get("calib_energy_last"),
+        measured_ac_power_kw=data.get("measured_ac_power_kw"),
     )

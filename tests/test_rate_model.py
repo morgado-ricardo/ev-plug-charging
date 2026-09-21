@@ -12,6 +12,11 @@ import random
 import pytest
 
 from ev_plug_charging.const import (
+    EFFICIENCY_MAX_GAIN,
+    EFFICIENCY_MAX_PLAUSIBLE,
+    EFFICIENCY_MIN_PLAUSIBLE,
+    EFFICIENCY_MIN_SAMPLES,
+    MEASURED_POWER_MIN_SAMPLES,
     RATE_MODEL_CLAMP_HIGH,
     RATE_MODEL_CLAMP_LOW,
     RATE_MODEL_MIN_SAMPLES,
@@ -22,11 +27,16 @@ from ev_plug_charging.rate_model import (
     clamp,
     effective_rate,
     learned_rate,
+    measured_ac_power_p90,
+    record_efficiency_sample,
+    reset_samples,
     seed_rate,
+    seed_rate_calibrated,
     seed_rate_from_amps,
     solve_anchor_correction,
+    working_efficiency,
 )
-from ev_plug_charging.models import RateSnapshot
+from ev_plug_charging.models import RateSnapshot, SessionState
 
 SEED = seed_rate(capacity_kwh=50.8, power_kw=1.84, efficiency=0.82)
 
@@ -200,3 +210,214 @@ def test_solve_anchor_correction_is_clamped():
     rate = RateSnapshot(minutes_per_percent=20.0)
     corrected = solve_anchor_correction(60.0, start, now, rate)
     assert corrected == -30.0
+
+
+# -- Efficiency self-calibration (Phase 2) -------------------------------- #
+
+CAPACITY = 50.0
+CURRENT_A = 8.0
+VOLTAGE = 230.0
+PRIOR = 0.75
+CONFIGURED_KW = CURRENT_A * VOLTAGE / 1000.0  # 1.84 kW
+CONFIGURED_EFFECTIVE_KW = CONFIGURED_KW * PRIOR
+
+
+def test_seed_calibrated_matches_configured_when_efficiency_equals_prior():
+    """No measurement, no calibration movement -- the calibrated seed must
+    reduce to exactly the same figure the amps-only seed already gives."""
+    seed = seed_rate_calibrated(CAPACITY, CURRENT_A, VOLTAGE, PRIOR, None, PRIOR)
+    assert seed == seed_rate_from_amps(CAPACITY, CURRENT_A, VOLTAGE, PRIOR)
+
+
+def test_seed_calibrated_falls_back_to_configured_power_without_a_measurement():
+    """Efficiency corrected upward but no measured AC power yet -- the
+    configured amps still supply the power term."""
+    seed = seed_rate_calibrated(CAPACITY, CURRENT_A, VOLTAGE, PRIOR, None, PRIOR * 1.1)
+    expected = seed_rate(CAPACITY, CONFIGURED_KW * PRIOR * 1.1, 1.0)
+    assert seed == pytest.approx(expected)
+
+
+def test_seed_calibrated_uses_measured_power_over_configured():
+    """Once a measured AC power is available, it (not the configured amps)
+    supplies the power term -- confirmed by it changing the result even
+    with efficiency held at the prior."""
+    seed_no_measurement = seed_rate_calibrated(CAPACITY, CURRENT_A, VOLTAGE, PRIOR, None, PRIOR)
+    seed_with_measurement = seed_rate_calibrated(
+        CAPACITY, CURRENT_A, VOLTAGE, PRIOR, CONFIGURED_KW * 1.05, PRIOR
+    )
+    assert seed_with_measurement != seed_no_measurement
+
+
+@pytest.mark.parametrize(
+    "measured_kw,calibrated_efficiency",
+    [
+        (None, 0.95),  # efficiency alone tries to push far past the cap
+        (CONFIGURED_KW * 3.0, PRIOR),  # measured power alone tries to
+        (CONFIGURED_KW * 3.0, 0.95),  # both at once, worst case
+    ],
+)
+def test_seed_never_runs_more_than_gain_cap_fast(measured_kw, calibrated_efficiency):
+    """THE headline safety property for Phase 2, the calibration
+    equivalent of test_effective_rate_never_below_seed above: however
+    aggressive the measured power or the calibrated efficiency, the
+    calibrated seed may never imply more than EFFICIENCY_MAX_GAIN times
+    the as-configured effective power -- i.e. it may never fall below
+    seed_configured / EFFICIENCY_MAX_GAIN."""
+    seed_configured = seed_rate_from_amps(CAPACITY, CURRENT_A, VOLTAGE, PRIOR)
+    seed = seed_rate_calibrated(
+        CAPACITY, CURRENT_A, VOLTAGE, PRIOR, measured_kw, calibrated_efficiency
+    )
+    assert seed >= seed_configured / EFFICIENCY_MAX_GAIN - 1e-9
+
+
+@pytest.mark.parametrize("bias", [0.9, 1.0, 1.05, 1.1, 1.2, 1.5, 2.0])
+def test_seed_never_runs_more_than_gain_cap_fast_over_random_inputs(bias: float):
+    """Same property, swept over a range of measured-power/efficiency
+    combinations rather than just the boundary cases above."""
+    seed_configured = seed_rate_from_amps(CAPACITY, CURRENT_A, VOLTAGE, PRIOR)
+    for eff in (0.50, 0.65, 0.75, 0.85, 0.95):
+        seed = seed_rate_calibrated(
+            CAPACITY, CURRENT_A, VOLTAGE, PRIOR, CONFIGURED_KW * bias, eff
+        )
+        assert seed >= seed_configured / EFFICIENCY_MAX_GAIN - 1e-9
+
+
+def test_seed_calibrated_moves_freely_downward():
+    """Downward movement (a lower calibrated efficiency, or a measured
+    power below configured) is unbounded and free -- only the upward
+    direction is capped."""
+    seed_configured = seed_rate_from_amps(CAPACITY, CURRENT_A, VOLTAGE, PRIOR)
+    seed = seed_rate_calibrated(CAPACITY, CURRENT_A, VOLTAGE, PRIOR, CONFIGURED_KW * 0.3, 0.50)
+    assert seed > seed_configured  # slower (higher minutes/%) is safe and unbounded
+
+
+def test_reset_samples_clears_efficiency_samples_too():
+    state = SessionState(rate_samples=(20.0, 21.0), efficiency_samples=(0.7, 0.75))
+    new_state = reset_samples(state)
+    assert new_state.rate_samples == ()
+    assert new_state.efficiency_samples == ()
+
+
+def test_reset_samples_leaves_the_in_flight_pair_alone():
+    """A capacity change/reset button invalidates the HISTORY, not the
+    pair belonging to whatever session is currently open."""
+    state = SessionState(
+        efficiency_samples=(0.7,), calib_soc_first=40.0, calib_energy_first=0.5
+    )
+    new_state = reset_samples(state)
+    assert new_state.calib_soc_first == 40.0
+    assert new_state.calib_energy_first == 0.5
+
+
+def _eff_session(**overrides) -> CompletedSession:
+    base = dict(
+        duration_minutes=60.0,
+        soc_gained=15.0,
+        stayed_on_plug=True,
+        ran_above_target=False,
+        anchor_provisional_unresolved=False,
+        stop_reason="power_drop",
+    )
+    base.update(overrides)
+    return CompletedSession(**base)
+
+
+def test_record_efficiency_sample_needs_a_matched_pair():
+    state = SessionState()  # no calib pair at all
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert new_state.efficiency_samples == ()
+
+
+def test_record_efficiency_sample_rejects_small_soc_gain():
+    """Below RATE_MODEL_MIN_SOC_GAIN -- the same bar the rate sample uses
+    -- sensor quantisation dominates the paired measurement."""
+    state = SessionState(
+        calib_soc_first=50.0, calib_energy_first=1.0, calib_soc_last=55.0, calib_energy_last=3.0
+    )
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert new_state.efficiency_samples == ()
+
+
+def test_record_efficiency_sample_rejects_small_energy_gain():
+    state = SessionState(
+        calib_soc_first=50.0, calib_energy_first=1.0, calib_soc_last=65.0, calib_energy_last=1.5
+    )
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert new_state.efficiency_samples == ()
+
+
+def test_record_efficiency_sample_accepts_a_healthy_pair():
+    # 15 points of gain on a 50 kWh pack = 7.5 kWh "should have" flowed;
+    # 10 kWh actually flowed -> measured efficiency = 0.75, plausible.
+    state = SessionState(
+        calib_soc_first=50.0, calib_energy_first=1.0, calib_soc_last=65.0, calib_energy_last=11.0
+    )
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert len(new_state.efficiency_samples) == 1
+    assert new_state.efficiency_samples[0] == pytest.approx(0.75)
+
+
+@pytest.mark.parametrize("measured", [0.30, EFFICIENCY_MIN_PLAUSIBLE - 0.01])
+def test_efficiency_rejects_implausibly_low_sample(measured):
+    """A mis-scaled sensor claiming near-zero efficiency is rejected
+    outright, not clipped into the plausible band."""
+    # capacity * soc_gain/100 / energy_gain == measured
+    energy_gain = CAPACITY * 15.0 / 100.0 / measured
+    state = SessionState(
+        calib_soc_first=50.0,
+        calib_energy_first=1.0,
+        calib_soc_last=65.0,
+        calib_energy_last=1.0 + energy_gain,
+    )
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert new_state.efficiency_samples == ()
+
+
+@pytest.mark.parametrize("measured", [1.4, EFFICIENCY_MAX_PLAUSIBLE + 0.01])
+def test_efficiency_rejects_implausibly_high_sample(measured):
+    """A mis-scaled sensor claiming a better-than-physical conversion is
+    rejected outright, never clamped in as 'maximally efficient'."""
+    energy_gain = CAPACITY * 15.0 / 100.0 / measured
+    state = SessionState(
+        calib_soc_first=50.0,
+        calib_energy_first=1.0,
+        calib_soc_last=65.0,
+        calib_energy_last=1.0 + energy_gain,
+    )
+    new_state = record_efficiency_sample(state, _eff_session(), CAPACITY)
+    assert new_state.efficiency_samples == ()
+
+
+def test_fewer_than_min_efficiency_samples_uses_prior():
+    for n in range(EFFICIENCY_MIN_SAMPLES):
+        samples = tuple([0.95] * n)  # a wildly optimistic sample sequence
+        assert working_efficiency(samples, PRIOR) == PRIOR
+
+
+def test_working_efficiency_derates_the_median():
+    from ev_plug_charging.const import EFFICIENCY_DERATE
+
+    samples = (0.70, 0.72, 0.74)
+    result = working_efficiency(samples, PRIOR)
+    assert result == pytest.approx(0.72 * EFFICIENCY_DERATE)
+
+
+def test_working_efficiency_has_no_floor_at_the_prior():
+    """Unlike effective_rate's max(learned, seed), a LOWER working
+    efficiency (the safe direction -- it shrinks the seed's implied
+    power) is free to move below the prior."""
+    samples = (0.55, 0.56, 0.57)
+    result = working_efficiency(samples, PRIOR)
+    assert result < PRIOR
+
+
+def test_measured_ac_power_p90_needs_min_samples():
+    samples = tuple([2.0] * (MEASURED_POWER_MIN_SAMPLES - 1))
+    assert measured_ac_power_p90(samples) is None
+
+
+def test_measured_ac_power_p90_nearest_rank():
+    samples = tuple(float(i) for i in range(1, 11))  # 1..10
+    result = measured_ac_power_p90(samples)
+    # nearest-rank, 0-indexed: idx = int(10 * 0.90) = 9 -> ordered[9] == 10.0
+    assert result == 10.0

@@ -121,8 +121,12 @@ what session cost is computed from, and there's nothing sensible to default
 it to. Everything else has a working default and can be left as-is.
 
 There's no charge-efficiency field. It's the one number in this table
-nobody can actually look up, so it's a fixed internal value (0.82) rather
-than a guess dressed up as a setting.
+nobody can actually look up, so it starts from a deliberately pessimistic
+internal value rather than a guess dressed up as a setting — and unlike
+capacity and current, it doesn't stay fixed: see
+[Efficiency self-calibration](#efficiency-self-calibration-and-measured-ac-power)
+below for how it corrects itself from real sessions, and why it's still
+bounded.
 
 Capacity, current and the poll interval can be changed later from
 **Options**, along with notification targets, which events to mute, and
@@ -213,6 +217,44 @@ short of what you asked for, which you find out about in the morning when
 the car isn't ready. A rate biased slow just overshoots by a little. One of
 those is a real failure; the other is a rounding error. The clamp makes the
 safe direction the only possible one.
+
+## Efficiency self-calibration and measured AC power
+
+The seed itself starts from an intentionally pessimistic efficiency, not a
+number you provide, and corrects itself from your own completed sessions —
+the same way the learned rate does, but for a different part of the
+formula:
+
+- **Measured AC power.** Once your plug's power sensor has enough healthy
+  readings from a session (never during the taper near your target), its
+  own 90th-percentile draw supersedes the configured amps for that half of
+  the seed. If it disagrees with the configured current by more than 25%, a
+  **Repairs** entry says so — "configured 8 A, the plug reports ~6.1 A
+  equivalent" — so you find out your setting is wrong instead of it being
+  silently patched over.
+- **Efficiency.** Each session that qualifies (the same acceptance rule the
+  rate sample uses) measures efficiency from a matched pair of state-of-
+  charge and energy readings, never from session totals — the car's SoC
+  reports arrive in bursts, sometimes hours after a charge actually ends,
+  and pairing against totals would bias the measurement whenever that
+  happens. After at least three accepted sessions, the median of the recent
+  ones (with a small conservative derate) replaces the starting value.
+
+Both calibrations only ever feed the same seed the rate model already
+treats as a floor, and that seed carries its own bound: the calibrated
+effective power can never exceed the as-configured effective power (your
+amps × the starting efficiency) by more than 20%. So however optimistic the
+telemetry gets, the stop can never land more than 1 − 1/1.20 ≈ 17% earlier
+than what you actually configured. Moving *down* — a lower calibrated
+efficiency, a slower projection — has no such limit, for the same reason the
+rate model's own clamp is one-directional: slower is always safe.
+
+Because state-of-charge reporting is sparse by design, qualifying sessions
+are not frequent — expect this to take weeks, not days, to move off the
+starting value on a quiet feed. The diagnostics download shows the current
+working efficiency, how many samples it's based on, the measured AC power,
+and whether the 20% cap is currently the thing holding it back, so "nothing
+has changed yet" is visibly different from "something is broken".
 
 ## 12 V auxiliary battery
 
