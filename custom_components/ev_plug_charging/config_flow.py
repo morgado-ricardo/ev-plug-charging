@@ -27,8 +27,7 @@ from .sources import (
 )
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
-    CONF_CHARGE_EFFICIENCY,
-    CONF_CHARGE_POWER_KW,
+    CONF_CHARGE_CURRENT_A,
     CONF_MUTED_EVENTS,
     CONF_NOTIFY_TARGETS,
     CONF_PLUG_ENERGY_SENSOR,
@@ -43,8 +42,7 @@ from .const import (
     CONF_VIN,
     CONFIG_VERSION,
     DEFAULT_BATTERY_CAPACITY_KWH,
-    DEFAULT_CHARGE_EFFICIENCY,
-    DEFAULT_CHARGE_POWER_KW,
+    DEFAULT_CHARGE_CURRENT_A,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_PSACC_URL,
     DEFAULT_TEMP_LIMIT_C,
@@ -95,16 +93,37 @@ SOURCE_SCHEMAS = {
 }
 
 
+#: Typical domestic EVSE/granny-cable current steps. custom_value=True means
+#: this is a starting point, not a fence -- any value the user actually has
+#: is still accepted, typed in free-text.
+_CHARGE_CURRENT_OPTIONS = ["6", "8", "10", "13", "16"]
+
+
+def _amps_str(value: float) -> str:
+    """8.0 -> "8", 7.5 -> "7.5" -- so a migrated or default value matches
+    the option list's plain-integer style when it can, instead of always
+    showing a trailing ".0"."""
+    value = float(value)
+    return str(int(value)) if value.is_integer() else str(value)
+
+
 def _advanced_schema(defaults: dict[str, Any]) -> vol.Schema:
+    # CONF_PLUG_ENERGY_SENSOR is vol.Required with NO default when the
+    # caller has no value for it (a fresh install) -- there is no sensible
+    # value to default an unknown sensor to, unlike a number. When a value
+    # IS already known (options flow on an existing entry), it pre-fills
+    # normally.
+    energy_sensor_kwargs = (
+        {"default": defaults[CONF_PLUG_ENERGY_SENSOR]}
+        if CONF_PLUG_ENERGY_SENSOR in defaults
+        else {}
+    )
     return vol.Schema(
         {
-            vol.Optional(
-                CONF_PLUG_ENERGY_SENSOR, default=defaults.get(CONF_PLUG_ENERGY_SENSOR)
-            ): vol.Any(
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor", device_class="energy")
-                ),
-                None,
+            vol.Required(
+                CONF_PLUG_ENERGY_SENSOR, **energy_sensor_kwargs
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", device_class="energy")
             ),
             vol.Optional(
                 CONF_PLUG_TEMP_SENSOR, default=defaults.get(CONF_PLUG_TEMP_SENSOR)
@@ -122,13 +141,23 @@ def _advanced_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH),
             ): vol.Coerce(float),
             vol.Required(
-                CONF_CHARGE_POWER_KW,
-                default=defaults.get(CONF_CHARGE_POWER_KW, DEFAULT_CHARGE_POWER_KW),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_CHARGE_EFFICIENCY,
-                default=defaults.get(CONF_CHARGE_EFFICIENCY, DEFAULT_CHARGE_EFFICIENCY),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
+                CONF_CHARGE_CURRENT_A,
+                default=_amps_str(defaults.get(CONF_CHARGE_CURRENT_A, DEFAULT_CHARGE_CURRENT_A)),
+            ): vol.All(
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=_CHARGE_CURRENT_OPTIONS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        custom_value=True,
+                    )
+                ),
+                vol.Coerce(float),
+            ),
+            # No charge_efficiency field: nobody knows this number either,
+            # and unlike amps there's nothing printed on the cable to read
+            # it off. Hidden behind CONF_EFFICIENCY_PRIOR, a fixed constant
+            # -- see coordinator.py._effective_rate and const.py's comment
+            # on DEFAULT_EFFICIENCY_PRIOR for why it isn't lowered yet.
             vol.Required(
                 CONF_POLL_INTERVAL,
                 default=defaults.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL_SECONDS),

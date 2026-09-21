@@ -23,6 +23,7 @@ from ev_plug_charging.rate_model import (
     effective_rate,
     learned_rate,
     seed_rate,
+    seed_rate_from_amps,
     solve_anchor_correction,
 )
 from ev_plug_charging.models import RateSnapshot
@@ -35,6 +36,21 @@ def test_seed_is_about_twenty_minutes_per_percent():
     # arithmetic should land near 20 min/%. A seed far from this means the
     # formula changed, and every projection moves with it.
     assert 20.0 <= SEED <= 20.5
+
+
+def test_amps_conversion_matches_the_legacy_kw_figure():
+    """8A at 230V is exactly the 1.84kW default this integration has always
+    used -- seed_rate_from_amps() must reproduce seed_rate() bit for bit
+    for the value everyone's already running, not just approximately."""
+    assert seed_rate_from_amps(50.8, 8.0, 230.0, 0.82) == seed_rate(50.8, 1.84, 0.82)
+
+
+def test_amps_conversion_scales_with_current():
+    """A 16A EVSE delivers twice the power of 8A, so half the minutes per
+    percent -- the estimator should track that whether it's told the amps
+    or the equivalent kW."""
+    double_current = seed_rate_from_amps(50.8, 16.0, 230.0, 0.82)
+    assert double_current == pytest.approx(SEED / 2.0)
 
 
 def test_fewer_than_min_samples_uses_seed_only():

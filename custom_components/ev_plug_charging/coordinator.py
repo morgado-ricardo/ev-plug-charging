@@ -37,8 +37,8 @@ from . import store as store_mod
 from .sources import SourceConnectionError, SourceResponseError, TelemetrySource, async_create_source
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
-    CONF_CHARGE_EFFICIENCY,
-    CONF_CHARGE_POWER_KW,
+    CONF_CHARGE_CURRENT_A,
+    CONF_EFFICIENCY_PRIOR,
     CONF_PLUG_ENERGY_SENSOR,
     CONF_PLUG_POWER_SENSOR,
     CONF_PLUG_SWITCH,
@@ -46,10 +46,14 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_RESCUE_REFRESH_ENABLED,
     CONF_TEMP_LIMIT,
+    DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_CHARGE_CURRENT_A,
+    DEFAULT_EFFICIENCY_PRIOR,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
     STORE_KEY_TEMPLATE,
     STORE_VERSION,
+    SUPPLY_VOLTAGE_V,
 )
 from .models import ChargeMode, Inputs, PlugAction, RateSnapshot
 
@@ -566,15 +570,19 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _effective_rate(self) -> RateSnapshot:
         capacity = self.entry.options.get(
-            CONF_BATTERY_CAPACITY_KWH, self.entry.data.get(CONF_BATTERY_CAPACITY_KWH, 50.0)
+            CONF_BATTERY_CAPACITY_KWH,
+            self.entry.data.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH),
         )
-        power = self.entry.options.get(
-            CONF_CHARGE_POWER_KW, self.entry.data.get(CONF_CHARGE_POWER_KW, 1.84)
+        current_a = self.entry.options.get(
+            CONF_CHARGE_CURRENT_A,
+            self.entry.data.get(CONF_CHARGE_CURRENT_A, DEFAULT_CHARGE_CURRENT_A),
         )
-        efficiency = self.entry.options.get(
-            CONF_CHARGE_EFFICIENCY, self.entry.data.get(CONF_CHARGE_EFFICIENCY, 0.82)
-        )
-        seed = rate_model.seed_rate(capacity, power, efficiency)
+        # The prior is a fixed constant in v4 -- not read from options, since
+        # there is no form field to write one there. entry.data is still
+        # checked, since that is where async_migrate_entry writes a
+        # migrated entry's carried-forward value.
+        efficiency = self.entry.data.get(CONF_EFFICIENCY_PRIOR, DEFAULT_EFFICIENCY_PRIOR)
+        seed = rate_model.seed_rate_from_amps(capacity, current_a, SUPPLY_VOLTAGE_V, efficiency)
         return rate_model.effective_rate(self._session_state.rate_samples, seed)
 
     # -- small entity/config helpers ---------------------------------------
