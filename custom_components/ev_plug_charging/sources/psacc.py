@@ -29,12 +29,8 @@ if TYPE_CHECKING:  # pragma: no cover
     import aiohttp
 
 from ..const import (
-    CONF_CHARGE_FINISHED_STATE_STRING,
-    CONF_CHARGING_STATE_STRING,
     CONF_PSACC_URL,
     CONF_VIN,
-    DEFAULT_CHARGE_FINISHED_STATE_STRING,
-    DEFAULT_CHARGING_STATE_STRING,
     SOURCE_TYPE_PSACC,
     VEHICLE_COMMAND_CHARGE_START,
     VEHICLE_COMMAND_CHARGE_STOP,
@@ -58,6 +54,23 @@ from .base import (
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 30
+
+# Stellantis' own Connected Car API defines charging.status as a closed,
+# Swagger-generated enum with exactly five values: Disconnected,
+# InProgress, Failure, Stopped, Finished --
+# https://github.com/flobz/psa_car_controller/blob/master/psa_car_controller/psa/connected_car_api/models/charging_status_enum.py
+# PSACC passes this value straight through from energy[].charging.status
+# without translating it, so it reads identically for every Stellantis-group
+# brand (Peugeot/Citroën/DS/Opel/Vauxhall/Fiat) and every deployment -- not
+# a per-installation setting, unlike the URL or VIN. These two used to be
+# config-flow fields on the assumption that they might vary; they don't.
+CHARGING_STATUS_IN_PROGRESS = "InProgress"
+# A SEPARATE terminal signal from CHARGING_STATUS_IN_PROGRESS above, not
+# its logical opposite -- the enum also has Disconnected/Failure/Stopped,
+# neither "in progress" nor "finished". This is the only completion path
+# that works no matter how the car was charged (plug, EVSE straight into
+# the wall, or a public charger with no telemetry of its own).
+CHARGING_STATUS_FINISHED = "Finished"
 
 # Candidate field names for a per-reading timestamp inside energy[0].
 # Probed in order; the first present and parseable wins. None of these are
@@ -119,8 +132,6 @@ def parse_vehicle_info(
     raw: dict[str, Any],
     now: datetime,
     prev: Optional[TelemetrySnapshot],
-    charging_state_string: str = DEFAULT_CHARGING_STATE_STRING,
-    charge_finished_state_string: str = DEFAULT_CHARGE_FINISHED_STATE_STRING,
 ) -> TelemetrySnapshot:
     """PSACC's get_vehicleinfo JSON -> TelemetrySnapshot. Pure: same inputs,
     same output, no I/O, no HA. Unit-tested directly."""
@@ -162,11 +173,10 @@ def parse_vehicle_info(
     charging_status = charging.get("status")
     plugged_raw = charging.get("plugged")
     plugged = bool(plugged_raw) if plugged_raw is not None else None
-    # A SEPARATE terminal-status match, not "not charging_state_string" --
-    # a provider's "done" value need not be the logical opposite of its
-    # "in progress" value (e.g. it could also report "Error" or
-    # "NotPlugged", neither of which is a completion).
-    car_charge_finished = charging_status == charge_finished_state_string
+    # A SEPARATE terminal-status match, not "not InProgress" -- the enum's
+    # other values (Disconnected, Failure, Stopped) are neither "in
+    # progress" nor "finished".
+    car_charge_finished = charging_status == CHARGING_STATUS_FINISHED
 
     payload_ts: Optional[datetime] = None
     for key in _PAYLOAD_TIMESTAMP_KEYS:
@@ -180,7 +190,7 @@ def parse_vehicle_info(
         soc=soc,
         soc_changed_at=soc_changed_at,
         charging_status=charging_status,
-        car_charging=charging_status == charging_state_string,
+        car_charging=charging_status == CHARGING_STATUS_IN_PROGRESS,
         plugged=plugged,
         polled_at=now,
         source_reachable=True,
@@ -213,14 +223,10 @@ class PsaccSource(TelemetrySource):
         session: "aiohttp.ClientSession",
         base_url: str,
         vin: str,
-        charging_state_string: str = DEFAULT_CHARGING_STATE_STRING,
-        charge_finished_state_string: str = DEFAULT_CHARGE_FINISHED_STATE_STRING,
     ) -> None:
         self._session = session
         self._base_url = base_url
         self._vin = vin
-        self._charging_state_string = charging_state_string
-        self._charge_finished_state_string = charge_finished_state_string
 
     @classmethod
     def from_config(cls, session: "aiohttp.ClientSession", config: dict[str, Any]) -> "PsaccSource":
@@ -228,12 +234,6 @@ class PsaccSource(TelemetrySource):
             session=session,
             base_url=config[CONF_PSACC_URL],
             vin=config[CONF_VIN],
-            charging_state_string=config.get(
-                CONF_CHARGING_STATE_STRING, DEFAULT_CHARGING_STATE_STRING
-            ),
-            charge_finished_state_string=config.get(
-                CONF_CHARGE_FINISHED_STATE_STRING, DEFAULT_CHARGE_FINISHED_STATE_STRING
-            ),
         )
 
     # -- TelemetrySource ---------------------------------------------------
@@ -242,9 +242,7 @@ class PsaccSource(TelemetrySource):
         self, now: datetime, prev: Optional[TelemetrySnapshot]
     ) -> TelemetrySnapshot:
         raw = await self._get_json(self._vehicle_info_url())
-        return parse_vehicle_info(
-            raw, now, prev, self._charging_state_string, self._charge_finished_state_string
-        )
+        return parse_vehicle_info(raw, now, prev)
 
     async def async_request_refresh(self) -> bool:
         await self._get_json(self._url(f"/wakeup/{self._vin}"), allow_empty=True)
@@ -278,8 +276,6 @@ class PsaccSource(TelemetrySource):
         # Deliberately no URL and no VIN -- both identify the vehicle/owner.
         return {
             "source_type": self.source_type,
-            "charging_state_string": self._charging_state_string,
-            "charge_finished_state_string": self._charge_finished_state_string,
             "supported_commands": sorted(self.supported_commands),
         }
 

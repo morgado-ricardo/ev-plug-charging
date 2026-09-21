@@ -41,44 +41,39 @@ def test_parses_soc_status_and_plugged():
 
 
 def test_car_charge_finished_is_a_separate_terminal_signal():
-    """NOT the logical opposite of car_charging -- a provider can report a
-    third status (Disconnected, Error, ...) that is neither "in progress"
-    nor "finished"."""
-    finished = parse_vehicle_info(
-        _payload(status="Finished"), T0, None, "InProgress", "Finished"
-    )
+    """NOT the logical opposite of car_charging -- the enum has three other
+    values (Disconnected, Failure, Stopped), none of which is "in progress"
+    or "finished"."""
+    finished = parse_vehicle_info(_payload(status="Finished"), T0, None)
     assert finished.car_charge_finished is True
     assert finished.car_charging is False
 
-    charging = parse_vehicle_info(
-        _payload(status="InProgress"), T0, None, "InProgress", "Finished"
-    )
+    charging = parse_vehicle_info(_payload(status="InProgress"), T0, None)
     assert charging.car_charge_finished is False
 
-    neither = parse_vehicle_info(
-        _payload(status="Disconnected"), T0, None, "InProgress", "Finished"
-    )
+    neither = parse_vehicle_info(_payload(status="Disconnected"), T0, None)
     assert neither.car_charge_finished is False
     assert neither.car_charging is False
 
 
-def test_car_charge_finished_defaults_to_the_finished_string():
-    snap = parse_vehicle_info(_payload(status="Finished"), T0, prev=None)
-    assert snap.car_charge_finished is True
+def test_car_charging_and_finished_track_the_fixed_stellantis_enum():
+    """charging.status is not a per-deployment setting -- Stellantis'
+    Connected Car API defines it as a closed, five-value enum (see the
+    citation in sources/psacc.py), identical for every vehicle brand and
+    every PSACC install. Only InProgress means car_charging; only Finished
+    means car_charge_finished; the other three are neither."""
+    for status in ("Disconnected", "Failure", "Stopped"):
+        snap = parse_vehicle_info(_payload(status=status), T0, prev=None)
+        assert snap.car_charging is False, status
+        assert snap.car_charge_finished is False, status
 
-
-def test_car_charging_is_normalised_against_the_configured_state_string():
-    """Each provider spells "charging" differently; mapping it is the
-    source's job so nothing downstream has to know the vocabulary."""
-    charging = parse_vehicle_info(_payload(status="InProgress"), T0, None, "InProgress")
+    charging = parse_vehicle_info(_payload(status="InProgress"), T0, prev=None)
     assert charging.car_charging is True
+    assert charging.car_charge_finished is False
 
-    idle = parse_vehicle_info(_payload(status="Disconnected"), T0, None, "InProgress")
-    assert idle.car_charging is False
-
-    # A different deployment reporting a different word entirely.
-    custom = parse_vehicle_info(_payload(status="CHARGING"), T0, None, "CHARGING")
-    assert custom.car_charging is True
+    finished = parse_vehicle_info(_payload(status="Finished"), T0, prev=None)
+    assert finished.car_charging is False
+    assert finished.car_charge_finished is True
 
 
 def test_missing_energy_block_is_no_reading_not_an_error():

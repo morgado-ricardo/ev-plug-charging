@@ -70,7 +70,6 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
         CONF_BATTERY_CAPACITY_KWH,
         CONF_CHARGE_EFFICIENCY,
         CONF_CHARGE_POWER_KW,
-        CONF_CHARGING_STATE_STRING,
         CONF_PLUG_POWER_SENSOR,
         CONF_PLUG_SWITCH,
         CONF_POLL_INTERVAL,
@@ -98,7 +97,6 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
             CONF_SOURCE_TYPE: SOURCE_TYPE_PSACC,
             CONF_PSACC_URL: "http://psacc.example",
             CONF_VIN: "VF1TESTVIN",
-            CONF_CHARGING_STATE_STRING: "InProgress",
             CONF_PLUG_SWITCH: plug_switch,
             CONF_PLUG_POWER_SENSOR: plug_power,
             CONF_BATTERY_CAPACITY_KWH: 50.0,
@@ -284,7 +282,6 @@ async def test_config_flow_picks_a_source_then_configures_it(hass, aioclient_moc
         {
             CONF_PSACC_URL: "http://psacc.example",
             CONF_VIN: "VF1TESTVIN",
-            "charging_state_string": "InProgress",
         },
     )
     assert result["step_id"] == "actuator"
@@ -334,7 +331,6 @@ async def test_config_flow_reports_an_unreachable_source(hass, aioclient_mock):
         {
             CONF_PSACC_URL: "http://nope.example",
             CONF_VIN: "VF1TESTVIN",
-            "charging_state_string": "InProgress",
         },
     )
 

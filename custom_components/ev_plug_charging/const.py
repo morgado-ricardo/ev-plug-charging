@@ -38,16 +38,16 @@ SOURCE_TYPE_PSACC = "psacc"
 # --- Config flow: PSACC source step -----------------------------------------
 CONF_PSACC_URL = "psacc_url"
 CONF_VIN = "vin"
-CONF_CHARGING_STATE_STRING = "charging_state_string"
-# The car's own terminal "charge finished" status string -- a SEPARATE
-# signal from CONF_CHARGING_STATE_STRING above. It is the only completion
-# path that works no matter how the car was charged (plug, EVSE straight
-# into the wall, or a public charger with no telemetry of its own).
-CONF_CHARGE_FINISHED_STATE_STRING = "charge_finished_state_string"
 
 DEFAULT_PSACC_URL = "http://homeassistant.local:5000"
-DEFAULT_CHARGING_STATE_STRING = "InProgress"
-DEFAULT_CHARGE_FINISHED_STATE_STRING = "Finished"
+
+# The two charging-status strings used to be config-flow fields
+# (charging_state_string / charge_finished_state_string), on the (wrong)
+# assumption that different PSACC deployments might spell them differently.
+# They don't: Stellantis' Connected Car API defines charging.status as a
+# closed, Swagger-generated enum with exactly five values, identical for
+# every vehicle brand and every deployment. Now hardcoded in
+# sources/psacc.py, the one file that is allowed to know this.
 
 # --- Config flow: actuator step (source-agnostic) ---------------------------
 CONF_PLUG_SWITCH = "plug_switch_entity_id"
