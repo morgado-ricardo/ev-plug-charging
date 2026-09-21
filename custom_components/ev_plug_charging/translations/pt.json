@@ -13,9 +13,7 @@
         "description": "A ligação é testada antes de continuares, para que um endereço ou ID de veículo errado seja apanhado agora e não na primeira consulta esta noite.",
         "data": {
           "psacc_url": "URL base do PSACC",
-          "vin": "Identificação do veículo (VIN)",
-          "charging_state_string": "Texto de estado \"a carregar\"",
-          "charge_finished_state_string": "Texto de estado \"carregamento concluído\""
+          "vin": "Identificação do veículo (VIN)"
         }
       },
       "actuator": {

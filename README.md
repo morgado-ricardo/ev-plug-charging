@@ -93,8 +93,6 @@ only option is PSA Car Controller.
 |---|---|
 | PSACC base URL | e.g. `http://192.168.1.10:5000` |
 | Vehicle ID (VIN) | as PSACC knows it |
-| Charging-state string | what PSACC reports while charging — default `InProgress` |
-| Charge-finished state string | what it reports once charging ends — default `Finished` |
 
 The connection is tested before you can continue — one real call, showing
 the state of charge and status it found — so a wrong address or vehicle ID

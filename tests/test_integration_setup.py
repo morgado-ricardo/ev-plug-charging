@@ -70,7 +70,6 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
         CONF_BATTERY_CAPACITY_KWH,
         CONF_CHARGE_EFFICIENCY,
         CONF_CHARGE_POWER_KW,
-        CONF_CHARGING_STATE_STRING,
         CONF_PLUG_POWER_SENSOR,
         CONF_PLUG_SWITCH,
         CONF_POLL_INTERVAL,
@@ -98,7 +97,6 @@ async def _setup_entry(hass, aioclient_mock, plug_switch="switch.plug", plug_pow
             CONF_SOURCE_TYPE: SOURCE_TYPE_PSACC,
             CONF_PSACC_URL: "http://psacc.example",
             CONF_VIN: "VF1TESTVIN",
-            CONF_CHARGING_STATE_STRING: "InProgress",
             CONF_PLUG_SWITCH: plug_switch,
             CONF_PLUG_POWER_SENSOR: plug_power,
             CONF_BATTERY_CAPACITY_KWH: 50.0,
@@ -284,7 +282,6 @@ async def test_config_flow_picks_a_source_then_configures_it(hass, aioclient_moc
         {
             CONF_PSACC_URL: "http://psacc.example",
             CONF_VIN: "VF1TESTVIN",
-            "charging_state_string": "InProgress",
         },
     )
     assert result["step_id"] == "actuator"
@@ -334,7 +331,6 @@ async def test_config_flow_reports_an_unreachable_source(hass, aioclient_mock):
         {
             CONF_PSACC_URL: "http://nope.example",
             CONF_VIN: "VF1TESTVIN",
-            "charging_state_string": "InProgress",
         },
     )
 
@@ -643,6 +639,8 @@ async def test_plug_actuation_carries_a_context_shared_with_its_event(hass, aioc
     EVENT_PLUG_COMMANDED that brackets it share one Context, which is what
     lets Home Assistant's logbook attribute the state change to this
     integration instead of recording an anonymous flip."""
+    from unittest.mock import patch
+
     from pytest_homeassistant_custom_component.common import async_mock_service
 
     from ev_plug_charging.const import (
@@ -659,7 +657,9 @@ async def test_plug_actuation_carries_a_context_shared_with_its_event(hass, aioc
     hass.states.async_set("switch.plug", "off")
     hass.states.async_set("sensor.plug_power", "0")
     # SoC 55 vs the default 80% target -> below_target -> plug ON on the
-    # very first refresh.
+    # very first refresh, PROVIDED it runs inside the default 23:00-07:00
+    # window -- frozen here so the assertion doesn't depend on the real
+    # wall-clock time the test happens to run at.
     aioclient_mock.get(
         "http://psacc.example/get_vehicleinfo/VF1TESTVIN?from_cache=1",
         json=VEHICLE_INFO_RESPONSE,
@@ -680,8 +680,10 @@ async def test_plug_actuation_carries_a_context_shared_with_its_event(hass, aioc
         },
     )
     entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    midnight = dt_util.now().replace(hour=23, minute=30, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=midnight):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
 
     assert len(switch_calls) == 1
     assert len(commanded_events) == 1
@@ -696,6 +698,8 @@ async def test_actuation_event_is_fired_before_the_switch_service_call(hass, aio
     context to whichever row is EARLIEST to carry it. Fire the event after
     the switch call instead, and the plug's own state-change row wins that
     slot and there is nothing left to attribute it to."""
+    from unittest.mock import patch
+
     from pytest_homeassistant_custom_component.common import async_mock_service
 
     from ev_plug_charging.const import (
@@ -743,8 +747,12 @@ async def test_actuation_event_is_fired_before_the_switch_service_call(hass, aio
         },
     )
     entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    # Frozen in-window, same reasoning as the context-sharing test above:
+    # the ordering assertion needs an actuation to actually happen.
+    midnight = dt_util.now().replace(hour=23, minute=30, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=midnight):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
 
     assert order == ["event", "service_call"]
 

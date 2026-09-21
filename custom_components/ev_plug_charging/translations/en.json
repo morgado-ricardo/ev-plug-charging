@@ -13,9 +13,7 @@
         "description": "The connection is tested before you continue, so a wrong address or vehicle ID is caught now rather than on the first poll tonight.",
         "data": {
           "psacc_url": "PSACC base URL",
-          "vin": "Vehicle ID (VIN)",
-          "charging_state_string": "Charging-state string",
-          "charge_finished_state_string": "Charge-finished state string"
+          "vin": "Vehicle ID (VIN)"
         }
       },
       "actuator": {
