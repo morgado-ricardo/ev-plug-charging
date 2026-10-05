@@ -52,9 +52,7 @@ class WindowTimeEntity(EvPlugChargingEntity, RestoreEntity, TimeEntity):
         if last is not None:
             try:
                 hh, mm, *_ = last.state.split(":")
-                setattr(
-                    self.coordinator.settings, self._key, time_cls(int(hh), int(mm))
-                )
+                self.coordinator.restore_setting(self._key, time_cls(int(hh), int(mm)))
             except (ValueError, AttributeError):
                 pass
 

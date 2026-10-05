@@ -165,12 +165,25 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         triggers a re-evaluation on the same tick, rather than waiting for
         the next poll: flipping the charge mode should take effect now,
         not in two minutes."""
+        self._apply_settings(changes)
+        self.hass.async_create_task(self.async_request_refresh())
+
+    def restore_setting(self, key: str, value: Any) -> None:
+        """Called by a settings entity restoring its last state at startup.
+        Must go through here rather than a bare setattr: async_setup() arms
+        the window-edge callbacks from the RuntimeSettings defaults
+        (23:00/07:00) before any entity has restored, so a restored window
+        time that skipped the re-arm would leave the close edge firing at
+        07:00 every morning, whatever the Window end entity shows. No
+        refresh -- this is startup, and the HA-start evaluation follows."""
+        self._apply_settings({key: value})
+
+    def _apply_settings(self, changes: dict[str, Any]) -> None:
         rearm_window = "window_start" in changes or "window_end" in changes
         for key, value in changes.items():
             setattr(self.settings, key, value)
         if rearm_window:
             self._arm_window_callbacks()
-        self.hass.async_create_task(self.async_request_refresh())
 
     # -- lifecycle --------------------------------------------------------
 

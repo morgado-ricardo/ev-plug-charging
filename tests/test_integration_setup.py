@@ -156,6 +156,49 @@ async def test_coordinator_polled_psacc_and_evaluated(hass, aioclient_mock):
     assert coordinator.last_decision.plug == PlugAction.UNCHANGED
 
 
+async def test_restored_window_times_rearm_the_edge_callbacks(hass, aioclient_mock):
+    """A restart arms the window-edge callbacks from the RuntimeSettings
+    defaults (23:00/07:00) before the time entities restore their last
+    state. Restoring must re-arm them, or the close edge keeps firing at
+    07:00 while the Window end entity shows 08:00 -- the plug was cut an
+    hour early, reason window_close, on a real morning."""
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import DOMAIN
+    from homeassistant.core import State
+    from pytest_homeassistant_custom_component.common import mock_restore_cache
+
+    mock_restore_cache(
+        hass,
+        (
+            State("time.mock_title_window_start", "22:00:00"),
+            State("time.mock_title_window_end", "08:00:00"),
+        ),
+    )
+
+    armed: list[tuple[str, int, int]] = []
+    from homeassistant.helpers import event as event_helper
+
+    real_track = event_helper.async_track_time_change
+
+    def recording_track(hass_, action, hour=None, minute=None, second=None):
+        armed.append((action.__name__, hour, minute))
+        return real_track(hass_, action, hour=hour, minute=minute, second=second)
+
+    with patch.object(event_helper, "async_track_time_change", recording_track):
+        entry, _ = await _setup_entry(hass, aioclient_mock)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    # Guard against the restore cache silently not matching the entity ids.
+    assert coordinator.settings.window_start.hour == 22
+    assert coordinator.settings.window_end.hour == 8
+
+    last_open = [a for a in armed if a[0] == "_on_window_open"][-1]
+    last_close = [a for a in armed if a[0] == "_on_window_close"][-1]
+    assert last_open[1:] == (22, 0)
+    assert last_close[1:] == (8, 0)
+
+
 async def test_enable_switch_reflects_settings_and_can_be_toggled(hass, aioclient_mock):
     from ev_plug_charging.const import DOMAIN
 
