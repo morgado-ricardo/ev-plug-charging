@@ -1353,3 +1353,85 @@ async def test_charge_not_started_to_a_notify_entity_points_at_the_dashboard(has
     assert len(calls) == 1
     assert "data" not in calls[0].data
     assert "Current SoC" in calls[0].data["message"]
+
+
+async def test_confirm_while_charging_is_recorded_at_the_charge_start(hass, aioclient_mock):
+    """PSACC unreachable at 23:30: Smart starts on the last reading. A "Yes"
+    tapped at 23:50 vouches for the value when charging began, so it is
+    recorded at charge_started_at, not at the tap."""
+    from datetime import timedelta
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import (
+        DOMAIN,
+        EVENT_MOBILE_APP_NOTIFICATION_ACTION,
+        SOC_ACTION_CONFIRM,
+    )
+    from ev_plug_charging.logic import window_instance_id
+
+    at = _at_window_time()
+    with patch("homeassistant.util.dt.now", return_value=at):
+        entry, _ = await _setup_entry(hass, aioclient_mock)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    # Source goes down; a charge is flowing (started on the last reading).
+    from ev_plug_charging import source as source_mod
+
+    from dataclasses import replace
+
+    # ...and its last reading is hours old, as it would be by then.
+    coordinator._telemetry = replace(  # noqa: SLF001
+        source_mod.unreachable_snapshot(at, coordinator._telemetry),  # noqa: SLF001
+        soc_changed_at=at - timedelta(hours=5),
+    )
+    hass.states.async_set("switch.plug", "on")
+    hass.states.async_set("sensor.plug_power", "1800")
+    with patch("homeassistant.util.dt.now", return_value=at):
+        await coordinator._async_evaluate_only()  # noqa: SLF001
+    started = coordinator._session_state.charge_started_at  # noqa: SLF001
+    assert started == at
+    assert coordinator.last_decision.reason == "below_target_unreachable"
+
+    tapped = at + timedelta(minutes=20)
+    settings = coordinator.settings
+    wid = window_instance_id(tapped, settings.window_start, settings.window_end)
+    with patch("homeassistant.util.dt.now", return_value=tapped):
+        hass.bus.async_fire(
+            EVENT_MOBILE_APP_NOTIFICATION_ACTION,
+            {"action": f"{SOC_ACTION_CONFIRM}|{entry.entry_id}|{wid}"},
+        )
+        await hass.async_block_till_done()
+
+    state = coordinator._session_state  # noqa: SLF001
+    assert state.manual_soc == 55.0  # VEHICLE_INFO_RESPONSE's level
+    assert state.manual_soc_at == started
+    # Captured provisional from the 5-hour-old reading, then corrected by
+    # the answer -- to exactly 55, because the answer is dated at the start.
+    assert state.anchor.soc == 55 and state.anchor.corrected
+    assert coordinator.last_decision.soc_origin == "manual"
+
+
+async def test_soc_confirm_requested_push_carries_the_question(hass):
+    from ev_plug_charging.const import CONF_NOTIFY_TARGETS, DOMAIN, SOC_PROMPT_TAG
+    from ev_plug_charging.models import Event
+    from ev_plug_charging.notify import async_dispatch_events
+
+    calls = async_mock_service(hass, "notify", "phone")
+    entry = MockConfigEntry(domain=DOMAIN, options={CONF_NOTIFY_TARGETS: ["notify.phone"]})
+    entry.add_to_hass(hass)
+    await async_dispatch_events(
+        hass,
+        entry,
+        [
+            Event(
+                name=f"{DOMAIN}_soc_confirm_requested",
+                data={"last_soc": 50.0, "target_soc": 80.0, "window_id": "2026-09-12"},
+            )
+        ],
+    )
+    assert len(calls) == 1
+    payload = calls[0].data
+    assert payload["title"] == "EV charging from last reading"
+    assert payload["message"].startswith("Charging from the last reading, 50%")
+    assert payload["data"]["tag"] == SOC_PROMPT_TAG
+    assert [a["title"] for a in payload["data"]["actions"]] == ["Yes, 50%", "Enter SoC"]

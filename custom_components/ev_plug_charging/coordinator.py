@@ -34,7 +34,7 @@ from . import logic as logic_mod
 from . import rate_model
 from . import source as source_mod
 from . import store as store_mod
-from .prompt import parse_soc_action, parse_soc_reply
+from .prompt import confirm_reading_at, parse_soc_action, parse_soc_reply
 from .sources import SourceConnectionError, SourceResponseError, TelemetrySource, async_create_source
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
@@ -171,17 +171,18 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._apply_settings(changes)
         self.hass.async_create_task(self.async_request_refresh())
 
-    async def async_set_manual_soc(self, soc: float) -> None:
+    async def async_set_manual_soc(self, soc: float, at: Optional[datetime] = None) -> None:
         """A person supplied the state of charge (the confirm prompt, the
         manual-SoC number entity, or the set_soc service). Recorded with
-        the time it was given -- logic.effective_reading decides when it
-        outranks telemetry and when it is spent -- and evaluated at once,
-        so a "yes" at 23:05 starts the charge on that same tick rather
-        than at the next poll."""
+        the time it was TRUE -- now, unless `at` says otherwise (see
+        _on_notification_action's "Yes") -- and evaluated at once, so an
+        answer takes effect on that same tick rather than at the next
+        poll. logic.effective_reading decides when it outranks telemetry
+        and when it is spent."""
         if not 0.0 <= soc <= 100.0:
             raise ValueError(f"State of charge must be 0-100, got {soc}")
         self._session_state = replace(
-            self._session_state, manual_soc=float(soc), manual_soc_at=dt_util.now()
+            self._session_state, manual_soc=float(soc), manual_soc_at=at or dt_util.now()
         )
         await self._store.async_save(store_mod.to_dict(self._session_state))
         await self._async_evaluate_only()
@@ -300,13 +301,26 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info("Ignoring a start-SoC answer for a window that has closed")
             return
 
+        at: Optional[datetime] = None
         if prefix == SOC_ACTION_CONFIRM:
-            # Confirming "still X%" is supplying X% now. X is whatever
-            # reading this coordinator still holds -- the same number the
-            # prompt offered, since nothing fresher has arrived (a fresher
-            # one would have started the charge without asking).
+            # Confirming "still X%": X is whatever reading this coordinator
+            # still holds -- the same number the prompt offered, since
+            # nothing fresher has arrived (a fresher one would be trusted
+            # and nobody would have been asked). It was true when the
+            # question was asked, not when the button was tapped: by then
+            # the charge may have been running on it for an hour.
             soc = self._telemetry.soc if self._telemetry else None
+            decision = self.last_decision
+            at = confirm_reading_at(
+                now,
+                charging=decision is not None and decision.charging_active,
+                charge_started_at=self._session_state.charge_started_at,
+                window_open_at=logic_mod.window_open_at(
+                    window_id, settings.window_start, now.tzinfo
+                ),
+            )
         else:
+            # A typed value is what the car's display shows now.
             soc = parse_soc_reply(event.data.get("reply_text"))
         if soc is None:
             _LOGGER.warning(
@@ -314,7 +328,7 @@ class EvPlugChargingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 event.data.get("reply_text"),
             )
             return
-        self.hass.async_create_task(self.async_set_manual_soc(soc))
+        self.hass.async_create_task(self.async_set_manual_soc(soc, at))
 
     @callback
     def _on_projection_tick(self, _now: datetime) -> None:

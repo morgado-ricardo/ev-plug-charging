@@ -736,6 +736,12 @@ def test_r15_the_window_still_charges_once_the_car_arrives():
 # (2026-10-14). The SoC was untrustworthy for the whole session, so the
 # projection was None and the soc_untrustworthy branch left the plug alone
 # on every tick -- nothing short of the window closing could stop it.
+#
+# Amended 2026-10-15, by the owner's decision rather than to make a change
+# pass: at window open Smart now STARTS on the carried-forward last reading
+# and asks whether it still holds (soc_confirm_requested), instead of
+# refusing to start and saying so (charge_not_started). Only the first-tick
+# assertions changed; everything about the stop is exactly as first written.
 # --------------------------------------------------------------------------- #
 
 
@@ -782,10 +788,11 @@ def test_r16_unreachable_source_still_stops_a_running_charge_at_target():
     state = SessionState(ha_started_at=dt(12, 0))
     state, _, decisions = _r16_night(state, soc=50.0, minutes=14 * 60)
 
-    # The not-started push still goes out at window open: nothing changed
-    # about failing closed on the START.
-    assert any(e.name.endswith("charge_not_started") for e in decisions[0].events)
-    assert decisions[0].plug == PlugAction.UNCHANGED
+    # Window open: start on the last reading, and ask whether it holds.
+    assert any(e.name.endswith("soc_confirm_requested") for e in decisions[0].events)
+    assert decisions[0].plug == PlugAction.ON
+    assert decisions[0].reason == "below_target_unreachable"
+    assert not any(e.name.endswith("charge_not_started") for d in decisions for e in d.events)
 
     stops = [d for d in decisions if d.plug == PlugAction.OFF]
     assert stops, "a running Smart charge must stop on projection even with the source down"
@@ -812,16 +819,13 @@ def test_r16_projection_is_shown_while_the_source_is_down():
     _, last, _ = _r16_night(state, soc=50.0, minutes=4 * 60)
     assert last.charging_active
     assert last.projected_soc is not None and 50.0 < last.projected_soc < 80.0
-    assert last.reason == "soc_untrustworthy"
-    assert last.plug == PlugAction.UNCHANGED
+    assert last.reason == "below_target_unreachable"
+    assert last.plug == PlugAction.UNCHANGED  # already on
 
 
-def test_r16_blind_projection_never_starts_a_charge():
-    """Below target with the source down and nothing flowing: still no ON
-    -- the blind projection only ever stops a charge already running."""
-    state = SessionState(ha_started_at=dt(12, 0))
-    inp = base_inputs().set(
-        now=dt(23, 30),
+def _r16_unreachable_tick(now, **overrides):
+    kwargs = dict(
+        now=now,
         soc=50.0,
         soc_changed_at=dt(18, 0),
         source_reachable=False,
@@ -829,10 +833,33 @@ def test_r16_blind_projection_never_starts_a_charge():
         car_charging=False,
         plug_power_w=0.0,
         rate=RATE,
-    ).build()
-    _, decision = reduce(state, inp)
+    )
+    kwargs.update(overrides)
+    return base_inputs().set(**kwargs).build()
+
+
+def test_r16_starts_on_the_last_reading_and_asks():
+    """Below target with the source down: start on the carried-forward
+    reading rather than waiting for someone to vouch for it."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    _, decision = reduce(state, _r16_unreachable_tick(dt(23, 30)))
+    assert decision.plug == PlugAction.ON
+    assert decision.reason == "below_target_unreachable"
+    asked = [e for e in decision.events if e.name.endswith("soc_confirm_requested")]
+    assert len(asked) == 1
+    assert asked[0].data["last_soc"] == 50.0
+
+
+def test_r16_does_not_start_on_a_reading_older_than_the_last_charge():
+    """A reading taken before the last completed charge is known to be too
+    low -- that charge happened after it. Starting from it would overshoot,
+    so this falls back to asking first."""
+    state = SessionState(ha_started_at=dt(12, 0), charge_completed_at=dt(20, 0))
+    _, decision = reduce(state, _r16_unreachable_tick(dt(23, 30)))
     assert decision.plug == PlugAction.UNCHANGED
     assert decision.reason == "soc_untrustworthy"
+    not_started = [e for e in decision.events if e.name.endswith("charge_not_started")]
+    assert not_started[0].data["reason"] == "reading_predates_last_charge"
 
 
 def test_r16_no_reading_at_all_is_never_read_as_at_target():

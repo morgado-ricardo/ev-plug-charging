@@ -69,7 +69,11 @@ incident:
    R16's: a charge already flowing on our plug, with a real (if old)
    reading, projected from that reading and stopped at target
    (`target_reached_unreachable`). It needs `inp.soc` to be present, so
-   the fail-closed 100 is never what it compares against.
+   the fail-closed 100 is never what it compares against. Below target,
+   the same untrustworthy-but-present reading also STARTS a Smart charge
+   (`below_target_unreachable`, plus a `soc_confirm_requested` push) --
+   unless it predates the last completed charge, which makes it known-low;
+   then it asks first, as with no reading at all.
 5. **Outside window** (`logic.py:536` onward) — restart-reconcile, then
    window-close, then "we turned it on so we turn it off", then leave
    alone. A restart with an `UNKNOWN` owner and the plug already on must
@@ -91,6 +95,10 @@ telemetry's own reading and was given after the last completed charge.
 It is trusted regardless of `source_reachable` -- the person is the source
 -- and a newly supplied value counts as a `fresh_reading_edge`, so an answer
 mid-charge corrects a provisional anchor through the normal one-shot path.
+That correction back-solves from when a manual reading was TRUE
+(`advance_session(reading_at=...)`), not from now: "Yes, still 50%"
+tapped an hour into a charge is dated at the charge start
+(`prompt.confirm_reading_at`), so the anchor stays exactly 50.
 
 Two things stay on the RAW inputs: `car_status_fresh` (a typed number says
 nothing about the car's cached status), and everything `_finalize` records

@@ -71,19 +71,23 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   every gate passes: the feed silent past a multiple of the expected
   reporting gap, a session actually in progress, and the source reachable.
   Don't add a second path that can also spend it.
-- **Fail closed, but never fail silent.** A missing or untrustworthy reading
-  must never be treated as good enough to stop on — but the user must always
-  be told why nothing happened. One deliberate exception: a Smart charge
-  already flowing on our plug while the source is unreachable is still
-  projected from the last known reading and stopped at target. A dead
-  source tells you no less about a charge already running than a silent
-  one does, and leaving it alone is what let a manual plug-on run to 97%
-  against an 80% target (R16). That projection never starts a charge, and
-  never exists with no reading at all.
+- **Fail closed, but never fail silent.** A missing reading must never be
+  treated as good enough to start or stop on — but the user must always be
+  told why nothing happened. An *unreachable* source's last reading is
+  different: it is a real reading, carried forward, just unconfirmed. Smart
+  starts on it at window open and asks (`soc_confirm_requested`), and the
+  R16 projection from it stops the charge at target if nobody answers.
+  Waiting for an answer instead costs the whole night when nobody is awake
+  to give one; leaving a running charge unprojected let a manual plug-on
+  run to 97% against 80% (R16). The one guard: a reading older than the
+  last completed charge is known to be too low, so that case still asks
+  before starting.
 - **A state of charge a person supplies is a reading, and it is spent.**
   `logic.effective_reading` trusts it (the person is the source) while it
   is newer than telemetry's own reading and was given after the last
-  completed charge -- one answer starts one charge, never two. Decisions
+  completed charge -- one answer starts one charge, never two. "Yes,
+  still X%" is dated when the question was asked (the charge may have run
+  on X for an hour by the tap); a typed value is dated now. Decisions
   run on the effective reading; `_finalize` records the RAW telemetry,
   because `prev_soc` seeds the freshness clock after a restart and a
   manual value there would make the next unchanged cached reading look

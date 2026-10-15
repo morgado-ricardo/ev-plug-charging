@@ -16,7 +16,13 @@ from datetime import time, timedelta
 from ev_plug_charging.const import SOC_ACTION_CONFIRM, SOC_ACTION_SET
 from ev_plug_charging.logic import effective_reading, reduce
 from ev_plug_charging.models import ChargeMode, PlugAction, RateSnapshot, SessionState
-from ev_plug_charging.prompt import parse_soc_action, parse_soc_reply, soc_prompt
+from ev_plug_charging.logic import window_instance_id, window_open_at
+from ev_plug_charging.prompt import (
+    confirm_reading_at,
+    parse_soc_action,
+    parse_soc_reply,
+    soc_prompt,
+)
 from ev_plug_charging.store import from_dict, to_dict
 
 from conftest import base_inputs, dt
@@ -50,15 +56,23 @@ def _answer(state, soc, at):
     return replace(state, manual_soc=soc, manual_soc_at=at)
 
 
-def _drive(state, start, minutes, soc_answer_at=None, soc_answer=None, **overrides):
+def _drive(
+    state, start, minutes, soc_answer_at=None, soc_answer=None, confirm=False, **overrides
+):
     """Tick every 5 minutes, following our own plug commands. Returns
-    (state, decisions)."""
+    (state, decisions).
+
+    `confirm=True` answers the way the "Yes, still X%" button does: the
+    value held when charging BEGAN (coordinator._on_notification_action
+    records it at charge_started_at while a charge is running). Otherwise
+    the answer is a typed value read off the car NOW."""
     now = start
     plug_on = overrides.pop("plug_on", False)
     decisions = []
     for _ in range(minutes // 5 + 1):
         if soc_answer_at is not None and now >= soc_answer_at and state.manual_soc_at is None:
-            state = _answer(state, soc_answer, now)
+            at = state.charge_started_at if confirm and state.charge_started_at else now
+            state = _answer(state, soc_answer, at)
         inp = _unreachable(
             now,
             plug_switch_on=plug_on,
@@ -102,30 +116,76 @@ def test_manual_reading_is_spent_by_the_charge_it_started():
 # --------------------------------------------------------------------------- #
 
 
-def test_confirming_the_prompt_starts_the_charge_and_it_stops_at_target():
-    state = SessionState(ha_started_at=dt(12, 0))
-    state, decisions = _drive(
-        state, dt(23, 0), 14 * 60, soc_answer_at=dt(23, 5), soc_answer=50.0
-    )
+def _stop(decisions):
+    return next(d for d in decisions if d.plug == PlugAction.OFF)
 
-    # 23:00: the question goes out, carrying what the prompt needs.
-    asked = [e for e in decisions[0].events if e.name.endswith("charge_not_started")]
-    assert len(asked) == 1
+
+def test_unanswered_night_starts_at_window_open_and_stops_at_target():
+    state = SessionState(ha_started_at=dt(12, 0))
+    state, decisions = _drive(state, dt(23, 0), 14 * 60)
+
+    # 23:00: started on the last reading, and the question went out with
+    # what the prompt needs.
+    assert decisions[0].plug == PlugAction.ON
+    assert decisions[0].reason == "below_target_unreachable"
+    asked = [e for d in decisions for e in d.events if e.name.endswith("soc_confirm_requested")]
+    assert len(asked) == 1  # once per window
     assert asked[0].data["last_soc"] == 50.0
     assert asked[0].data["window_id"] == "2026-09-12"
     assert asked[0].data["target_soc"] == 80.0
-    assert decisions[0].plug == PlugAction.UNCHANGED
 
-    # 23:05: answered -> started on that very tick, from the manual value.
-    assert decisions[1].plug == PlugAction.ON
-    assert decisions[1].reason == "below_target"
-    assert decisions[1].soc_origin == "manual"
-
-    # And stopped on the ordinary target path near 80, not R16's fallback.
-    stop = next(d for d in decisions if d.plug == PlugAction.OFF)
-    assert stop.reason == "target_reached"
+    # Nobody answered: R16's blind projection stops it near 80.
+    stop = _stop(decisions)
+    assert stop.reason == "target_reached_unreachable"
     assert 80.0 <= stop.projected_soc <= 81.0
     assert state.complete_notified
+
+
+def test_yes_during_the_charge_confirms_the_start_value():
+    """'Yes, still 50%' half an hour in means 50% when charging began --
+    the anchor stays 50 and the stop lands where the unanswered night's
+    did, now on the ordinary (trusted) target path."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    state, decisions = _drive(
+        state, dt(23, 0), 14 * 60, soc_answer_at=dt(23, 30), soc_answer=50.0, confirm=True
+    )
+    assert state.anchor.soc == 50 and state.anchor.corrected
+    stop = _stop(decisions)
+    assert stop.reason == "target_reached"
+    assert stop.soc_origin == "manual"
+    assert 80.0 <= stop.projected_soc <= 81.0
+
+    _, unanswered = _drive(SessionState(ha_started_at=dt(12, 0)), dt(23, 0), 14 * 60)
+    assert abs(
+        decisions.index(stop) - unanswered.index(_stop(unanswered))
+    ) <= 1, "confirming the start value must not move the stop"
+
+
+def test_typed_value_during_the_charge_corrects_the_start():
+    """A typed 55 at 23:30 is what the car shows NOW, so the start is
+    back-solved from it: ~25 minutes of charging at the capped rate before
+    23:30 puts the start near 54, and the stop comes earlier than the
+    unanswered night's."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    state, decisions = _drive(
+        state, dt(23, 0), 14 * 60, soc_answer_at=dt(23, 30), soc_answer=55.0
+    )
+    assert state.anchor.soc == 54 and state.anchor.corrected
+    stop = _stop(decisions)
+    assert stop.reason == "target_reached"
+    assert 80.0 <= stop.projected_soc <= 81.0
+
+    _, unanswered = _drive(SessionState(ha_started_at=dt(12, 0)), dt(23, 0), 14 * 60)
+    assert decisions.index(stop) < unanswered.index(_stop(unanswered))
+
+
+def test_plug_already_on_by_hand_is_kept_and_still_asked_once():
+    state = SessionState(ha_started_at=dt(12, 0))
+    _, decisions = _drive(state, dt(23, 0), 60, plug_on=True)
+    assert decisions[0].plug == PlugAction.UNCHANGED
+    assert decisions[0].reason == "below_target_unreachable"
+    asked = [e for d in decisions for e in d.events if e.name.endswith("soc_confirm_requested")]
+    assert len(asked) == 1
 
 
 def test_the_answer_is_not_reused_by_the_next_window():
@@ -309,3 +369,42 @@ def test_reply_parsing():
     assert parse_soc_reply("-1") is None
     assert parse_soc_reply("sixty") is None
     assert parse_soc_reply(None) is None
+
+
+def test_prompt_while_already_charging_says_so():
+    prompt = soc_prompt(_not_started(), "entry1", "18:00", charging=True)
+    assert prompt["message"].startswith("Charging from the last reading, 50% at 18:00")
+    assert "stop at 80%" in prompt["message"]
+    assert "what the car shows now" in prompt["message"]
+    assert [a["title"] for a in prompt["actions"]] == ["Yes, 50%", "Enter SoC"]
+    assert "what the car shows now" in prompt["message_no_actions"]
+
+
+def test_prompt_names_a_reading_older_than_the_last_charge():
+    prompt = soc_prompt(_not_started(reason="reading_predates_last_charge"), "entry1", None)
+    assert prompt["message"].startswith("The last reading is older than the last charge.")
+
+
+def test_yes_is_true_when_the_question_was_asked_not_when_tapped():
+    opened = dt(23, 0)
+    tapped = dt(23, 40)
+    # Charging since the window opened: true at the start.
+    assert confirm_reading_at(
+        tapped, charging=True, charge_started_at=dt(23, 0), window_open_at=opened
+    ) == dt(23, 0)
+    # Plug switched on by hand BEFORE the window: the question came at
+    # window open, so that is when "still 50%" was vouched for.
+    assert confirm_reading_at(
+        tapped, charging=True, charge_started_at=dt(21, 0), window_open_at=opened
+    ) == opened
+    # Nothing running: simply now.
+    assert confirm_reading_at(
+        tapped, charging=False, charge_started_at=dt(23, 0), window_open_at=opened
+    ) == tapped
+
+
+def test_window_open_at_inverts_window_instance_id():
+    start, end = time(23, 0), time(7, 0)
+    for now in (dt(23, 30), dt(23, 30) + timedelta(hours=5)):  # both sides of midnight
+        wid = window_instance_id(now, start, end)
+        assert window_open_at(wid, start, now.tzinfo) == dt(23, 0)

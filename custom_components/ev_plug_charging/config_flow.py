@@ -360,6 +360,7 @@ class EvPlugChargingOptionsFlow(config_entries.OptionsFlow):
                         options=[
                             "charge_started",
                             "charge_not_started",
+                            "soc_confirm_requested",
                             "soc_stale",
                             "bypass_detected",
                             "evse_no_power",

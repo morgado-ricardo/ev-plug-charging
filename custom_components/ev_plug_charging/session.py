@@ -11,7 +11,8 @@ own in tests/test_session.py.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Optional
 
 from .rate_model import solve_anchor_correction
 from .models import Inputs, SessionAnchor, SessionState
@@ -25,9 +26,15 @@ def advance_session(
     plug_on_edge: bool,
     charging_active_edge: bool,
     fresh_reading_edge: bool,
+    reading_at: Optional[datetime] = None,
 ) -> SessionState:
     """Run new-session detection and anchor capture/correction. Must run
     before the plug decision on every reduce() call.
+
+    `reading_at` is when the reading that may correct the anchor was true,
+    if that differs from now -- only for a person's answer: "yes, still
+    50%" confirms the value when charging BEGAN, not after half an hour of
+    it. Telemetry passes None and corrects at `inp.now`, as always.
     """
     # -- new-session detection. Level-based, so "did either signal edge
     # this tick" is two booleans rather than a race between two
@@ -106,7 +113,12 @@ def advance_session(
         and fresh_reading_edge
         and state.charge_started_at is not None
     ):
-        corrected = solve_anchor_correction(inp.soc, state.charge_started_at, inp.now, inp.rate)
+        at = inp.now
+        if reading_at is not None:
+            # Clamped: a reading can't predate the charge it corrects
+            # (that would credit negative elapsed time), nor postdate now.
+            at = min(max(reading_at, state.charge_started_at), inp.now)
+        corrected = solve_anchor_correction(inp.soc, state.charge_started_at, at, inp.rate)
         state = replace(
             state,
             anchor=replace(state.anchor, soc=round(corrected), provisional=False, corrected=True),

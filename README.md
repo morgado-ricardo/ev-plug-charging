@@ -224,19 +224,36 @@ button.
 
 ## Telling it the state of charge yourself
 
-Smart mode never *starts* a charge without a state of charge it can trust.
-When it has none — PSACC unreachable, or no telemetry configured at all —
-the `charge_not_started` push becomes a question:
+**PSACC unreachable at window open, with a last reading.** Smart mode
+starts charging from that last reading right away — waiting for someone to
+vouch for it would lose every minute until they did, and an unanswered
+night would charge nothing — and asks (`soc_confirm_requested`):
 
-> The car's data source is unreachable. Last reading: 50% at 18:00. Still
-> 50%? Confirm to charge to 80%, or reply with the current state of charge.
+> Charging from the last reading, 50% at 18:00 — the car's data source is
+> unreachable. It will stop at 80%. Still 50%? Confirm, or reply with what
+> the car shows now.
 >
 > **[Yes, 50%]** **[Enter SoC]**
 
-Tap **Yes**, or reply with a number, and the charge starts on that tick. The
-answer is a reading like any other: the session is anchored on it, projected
-forward, and stopped at target exactly as a telemetry-fed one would be.
-Three ways to give it, all equivalent:
+- **Nobody answers:** it projects from 50% and stops at 80%
+  (`target_reached_unreachable`).
+- **Yes:** 50% is confirmed as the value *when charging began*, however long
+  after that you tap it — the stop doesn't move.
+- **A typed number:** what the car's display shows *now*. The session's
+  start is worked back from it, and the stop moves accordingly.
+
+**No reading at all** (or No telemetry configured), or **a last reading
+older than the last completed charge** — known to be too low, so starting
+from it would overshoot: nothing starts until you answer, and the
+`charge_not_started` push asks instead:
+
+> The car's data source is unreachable. Last reading: 50% at 18:00. Still
+> 50%? Confirm to charge to 80%, or reply with the current state of charge.
+
+Answering starts the charge on that tick. Either way the answer is a reading
+like any other: the session is anchored on it, projected forward, and
+stopped at target exactly as a telemetry-fed one would be. Three ways to
+give it, all equivalent:
 
 - the push's buttons (companion-app `notify.<device>` targets only — a
   `notify.*` entity can't carry buttons, so its message points at the
@@ -253,8 +270,9 @@ It is honoured only while it is the best thing available:
 - **A button tapped after the window closed is ignored**, so "yes" the next
   morning can't start a charge from last night's value.
 
-Answering *during* a charge you started by hand corrects that session's
-start the same way a late real reading would.
+Answering *during* a charge — one it started on the last reading, or one
+you started by hand — corrects that session's start the same way a late
+real reading would.
 
 With **No telemetry**, every Smart charge starts this way. What you don't
 get without telemetry, because each needs the car itself to report: bypass
@@ -383,8 +401,9 @@ source-agnostic equivalent) and the 400 V traction battery's state of health
 Every reportable condition fires `ev_plug_charging_<name>` on the event bus,
 whether or not any notification target is configured:
 
-`charge_started`, `charge_not_started` (carrying `last_soc`, `last_soc_at`,
-`target_soc` and `window_id` — what the question above is built from),
+`charge_started`, `charge_not_started` and `soc_confirm_requested` (both
+carrying `last_soc`, `last_soc_at`, `target_soc` and `window_id` — what the
+questions above are built from),
 `charge_complete`,
 `window_shortfall`, `soc_stale`, `refresh_attempted`, `bypass_detected`,
 `overheat_cutoff`, `evse_no_power`, `soc_full`, `restart_reconciled_off`,
@@ -503,7 +522,8 @@ There are no automations here, so there are no traces to step through. One
 | `below_target` | It **is** charging — the plug should be on |
 | `in_window_no_action` | In the window, but something is suppressing a start |
 | `outside_window_not_ours` | Outside the window. Check the window entities, and check the clock |
-| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed: never *starts* a charge until you [give it one](#telling-it-the-state-of-charge-yourself). A charge already running (e.g. you switched the plug on by hand) is still projected from the last known reading and stopped at target |
+| `below_target_unreachable` | It **is** charging, from the last reading of an unreachable source, and has [asked](#telling-it-the-state-of-charge-yourself) whether that reading still holds |
+| `soc_untrustworthy` | No reading, or one older than the last completed charge. Won't *start* until you [give it one](#telling-it-the-state-of-charge-yourself). A charge already running (e.g. you switched the plug on by hand) is still projected and stopped at target |
 | `target_reached_unreachable` | Smart mode stopped a running charge at target while the source was unreachable, on the projection from the last known reading alone |
 | `disabled` | `switch.*_enabled` is off |
 | `target_reached` | Already at or over target |

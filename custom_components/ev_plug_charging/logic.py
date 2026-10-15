@@ -20,7 +20,7 @@ Each scenario is a real failure that happened once.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from .const import (
@@ -34,6 +34,7 @@ from .const import (
     EVENT_OVERHEAT_CUTOFF,
     EVENT_REFRESH_ATTEMPTED,
     EVENT_RESTART_RECONCILED_OFF,
+    EVENT_SOC_CONFIRM_REQUESTED,
     EVENT_SOC_FULL,
     EVENT_SOC_STALE,
     EVENT_WINDOW_SHORTFALL,
@@ -63,6 +64,7 @@ from .models import (
 __all__ = [
     "in_window",
     "window_instance_id",
+    "window_open_at",
     "is_trustworthy_soc",
     "effective_reading",
     "silence_minutes",
@@ -113,6 +115,12 @@ def window_instance_id(now: datetime, start: time, end: time) -> str:
     else:
         open_date = today
     return open_date.isoformat()
+
+
+def window_open_at(window_id: str, start: time, tzinfo) -> datetime:
+    """The instant the window occurrence named by window_instance_id()
+    opened -- its inverse, for the one caller that needs a time back."""
+    return datetime.combine(date.fromisoformat(window_id), start, tzinfo=tzinfo)
 
 
 def is_trustworthy_soc(soc: Optional[float], source_reachable: bool) -> bool:
@@ -360,6 +368,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         plug_on_edge=plug_on_edge,
         charging_active_edge=charging_active_edge,
         fresh_reading_edge=fresh_reading_edge,
+        reading_at=inp.soc_changed_at if soc_is_manual else None,
     )
     # Sticky-OR within the session: once true, stays true until
     # advance_session's new_session branch resets it. Runs AFTER
@@ -771,41 +780,75 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug = PlugAction.OFF
             reason = "target_reached_unreachable"
         elif inp.mode == ChargeMode.SMART and not soc_trustworthy:
-            # Fail closed, but never fail silent, and only once per
-            # window occurrence.
             wid = window_instance_id(inp.now, inp.window_start, inp.window_end)
             grace_ok = state.ha_started_at is not None and (
                 inp.now - state.ha_started_at
             ).total_seconds() >= WINDOW_START_GRACE_SECONDS
+            # Carries what the confirm prompt needs (notify.py): the last
+            # value to offer back, how old it is, the target it would
+            # charge to, and which window the answer is for -- an answer
+            # for a window that has since closed is ignored.
+            prompt_data = {
+                "last_soc": inp.soc,
+                "last_soc_at": (
+                    inp.soc_changed_at.isoformat() if inp.soc_changed_at is not None else None
+                ),
+                "target_soc": inp.target_soc,
+                "window_id": wid,
+            }
+            # The last reading is still a reading: carried forward unchanged
+            # by source.unreachable_snapshot(), just not confirmed. Waiting
+            # for someone to vouch for it costs every minute until they do,
+            # and an unanswered night costs the whole charge -- so start on
+            # it, and ask. Once current flows, blind_proj (above) projects
+            # from it and stops at target if nobody answers; an answer
+            # corrects the start through session.py's one-shot correction.
+            #
+            # Except when it predates the last completed charge: then it is
+            # known to be too low (that charge happened after it), and
+            # starting from it would overshoot. Ask first, as before.
+            reading_predates_charge = (
+                inp.soc is not None
+                and state.charge_completed_at is not None
+                and (inp.soc_changed_at is None or inp.soc_changed_at <= state.charge_completed_at)
+            )
             if (
-                not charging_active
-                and not inp.plug_switch_on
-                and grace_ok
-                and state.not_started_pushed_for != wid
+                inp.soc is not None
+                and not reading_predates_charge
+                and inp.soc < inp.target_soc
+                and not manual_off_active
+                and not completed_this_window
             ):
-                # Carries what the confirm prompt needs (notify.py): the
-                # last value to offer back, how old it is, the target it
-                # would charge to, and which window the answer is for --
-                # an answer for a window that has since closed is ignored.
-                events.append(
-                    Event(
-                        EVENT_CHARGE_NOT_STARTED,
-                        {
-                            "reason": "no_reading" if inp.soc is None else "source_unreachable",
-                            "last_soc": inp.soc,
-                            "last_soc_at": (
-                                inp.soc_changed_at.isoformat()
-                                if inp.soc_changed_at is not None
-                                else None
-                            ),
-                            "target_soc": inp.target_soc,
-                            "window_id": wid,
-                        },
+                if grace_ok and state.not_started_pushed_for != wid:
+                    events.append(Event(EVENT_SOC_CONFIRM_REQUESTED, prompt_data))
+                    state = replace(state, not_started_pushed_for=wid)
+                if inp.plug_switch_on:
+                    plug = PlugAction.UNCHANGED
+                else:
+                    plug = PlugAction.ON
+                    state = replace(state, plug_turned_on_by=Owner.US)
+                reason = "below_target_unreachable"
+            else:
+                # Fail closed, but never fail silent, and only once per
+                # window occurrence.
+                if (
+                    not charging_active
+                    and not inp.plug_switch_on
+                    and grace_ok
+                    and state.not_started_pushed_for != wid
+                ):
+                    if inp.soc is None:
+                        why = "no_reading"
+                    elif reading_predates_charge:
+                        why = "reading_predates_last_charge"
+                    else:
+                        why = "source_unreachable"
+                    events.append(
+                        Event(EVENT_CHARGE_NOT_STARTED, {"reason": why, **prompt_data})
                     )
-                )
-                state = replace(state, not_started_pushed_for=wid)
-            plug = PlugAction.UNCHANGED
-            reason = "soc_untrustworthy"
+                    state = replace(state, not_started_pushed_for=wid)
+                plug = PlugAction.UNCHANGED
+                reason = "soc_untrustworthy"
         elif inp.mode == ChargeMode.TIMED:
             if manual_off_active:
                 plug = PlugAction.UNCHANGED

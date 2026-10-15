@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     EVENT_CHARGE_NOT_STARTED,
     EVENT_PLUG_COMMANDED,
+    EVENT_SOC_CONFIRM_REQUESTED,
     PERSISTENT_EVENTS,
     SOC_PROMPT_TAG,
 )
@@ -41,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 _TITLES = {
     f"{DOMAIN}_charge_started": "EV charging started",
     f"{DOMAIN}_charge_not_started": "EV - charge NOT started",
+    f"{DOMAIN}_soc_confirm_requested": "EV charging from last reading",
     f"{DOMAIN}_charge_complete": "EV charging complete",
     f"{DOMAIN}_window_shortfall": "EV charging stopped (window closed)",
     f"{DOMAIN}_soc_stale": "EV - SoC not updating",
@@ -167,8 +169,13 @@ async def _async_push(
     title = _TITLES.get(event.name, event.name)
     message = _format_message(event)
     prompt = (
-        soc_prompt(event.data, entry_id, _local_hhmm(event.data.get("last_soc_at")))
-        if event.name == EVENT_CHARGE_NOT_STARTED and entry_id
+        soc_prompt(
+            event.data,
+            entry_id,
+            _local_hhmm(event.data.get("last_soc_at")),
+            charging=event.name == EVENT_SOC_CONFIRM_REQUESTED,
+        )
+        if event.name in (EVENT_CHARGE_NOT_STARTED, EVENT_SOC_CONFIRM_REQUESTED) and entry_id
         else None
     )
 

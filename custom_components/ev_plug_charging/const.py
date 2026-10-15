@@ -242,6 +242,9 @@ EVENT_BYPASS_DETECTED = f"{DOMAIN}_bypass_detected"
 EVENT_OVERHEAT_CUTOFF = f"{DOMAIN}_overheat_cutoff"
 EVENT_EVSE_NO_POWER = f"{DOMAIN}_evse_no_power"
 EVENT_SOC_FULL = f"{DOMAIN}_soc_full"
+# Smart mode started on the last reading of an unreachable source and is
+# asking whether that reading still holds (logic.reduce, rung 4).
+EVENT_SOC_CONFIRM_REQUESTED = f"{DOMAIN}_soc_confirm_requested"
 EVENT_RESTART_RECONCILED_OFF = f"{DOMAIN}_restart_reconciled_off"
 EVENT_AUX_BATTERY_LOW = f"{DOMAIN}_aux_battery_low"
 EVENT_AUX_BATTERY_CRITICAL = f"{DOMAIN}_aux_battery_critical"
