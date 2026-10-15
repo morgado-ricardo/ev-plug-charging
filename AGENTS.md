@@ -47,7 +47,7 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/{notify,repairs,diagnostics,services}.py` | Event dispatch, Repairs, the diagnostics download, the services. | Yes |
 | `custom_components/ev_plug_charging/logbook.py` | Describes `EVENT_PLUG_COMMANDED` for Home Assistant's logbook -- an integration platform, discovered via `manifest.json`'s `after_dependencies`, not an entity platform. | Yes |
 | `custom_components/ev_plug_charging/__init__.py` | `async_setup_entry`, `async_migrate_entry`, platform wiring. | Deferred |
-| `tests/test_scenarios.py` | R1–R15: the regression acceptance gate. | None |
+| `tests/test_scenarios.py` | R1–R16: the regression acceptance gate. | None |
 | `tests/test_*.py` (most others) | Unit tests for the pure core. | None |
 | `tests/test_integration_setup.py` | Config flow, coordinator, entity platforms against real Home Assistant. | Yes |
 | `tests/test_dashboard_examples.py` | Parses `dashboard*.yaml` and the platform modules; fails if a dashboard entity ID doesn't match an entity this integration actually creates. | None |
@@ -72,7 +72,13 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   Don't add a second path that can also spend it.
 - **Fail closed, but never fail silent.** A missing or untrustworthy reading
   must never be treated as good enough to stop on — but the user must always
-  be told why nothing happened.
+  be told why nothing happened. One deliberate exception: a Smart charge
+  already flowing on our plug while the source is unreachable is still
+  projected from the last known reading and stopped at target. A dead
+  source tells you no less about a charge already running than a silent
+  one does, and leaving it alone is what let a manual plug-on run to 97%
+  against an 80% target (R16). That projection never starts a charge, and
+  never exists with no reading at all.
 - **Never gate an actuation on a `now()`-derived display sensor.** Two code
   paths computing "are we in the window" independently (the tick vs. a
   boundary callback) can momentarily disagree. `reduce()` always re-derives
@@ -96,7 +102,7 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   `accept_session()`'s gates, it contributes one bounded sample toward the
   working efficiency (`rate_model.record_efficiency_sample`) — but it still
   never feeds a live actuation decision directly.
-- **`tests/test_scenarios.py` (R1–R15) is the acceptance gate** for any
+- **`tests/test_scenarios.py` (R1–R16) is the acceptance gate** for any
   change to `logic.py`, `session.py` or `rate_model.py`. Every scenario in
   it is a real failure that already happened once. A scenario is never
   edited to make a change pass; if one is genuinely wrong, that's a

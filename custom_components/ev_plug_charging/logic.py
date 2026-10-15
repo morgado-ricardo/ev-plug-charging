@@ -14,7 +14,7 @@ callback. Edge triggers lose their state across a restart; timestamps do
 not, and this module has to keep projecting correctly through both a
 restart and hours of telemetry silence.
 
-tests/test_scenarios.py (R1-R14) is the acceptance gate for this module.
+tests/test_scenarios.py (R1-R16) is the acceptance gate for this module.
 Each scenario is a real failure that happened once.
 """
 from __future__ import annotations
@@ -388,6 +388,35 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         state.anchor,
         inp.rate,
     )
+    # A charge already running on OUR plug while the source is unreachable
+    # still has a known starting point: the last reading, carried forward
+    # unchanged by source.unreachable_snapshot() and captured as this
+    # session's anchor. Projecting forward from it is exactly what R1 does
+    # through 790 minutes of silence from a REACHABLE source -- a dead
+    # source gives no less information than a silent one about a charge
+    # that is already flowing. Without this, `proj` is None for the whole
+    # outage and nothing stops the charge short of the window closing
+    # (R16: a manual plug-on after a "source unavailable" push ran to 97%
+    # against an 80% target).
+    #
+    # Used ONLY to stop a charge that is already running, never to start
+    # one: starting still fails closed on soc_untrustworthy below. And
+    # never with no reading at all -- inp.soc None leaves this None, so the
+    # session anchor's fail-closed 100 is never what a stop is compared
+    # against (R6).
+    blind_proj: Optional[float] = None
+    if proj is None and charging_active and inp.soc is not None:
+        blind_proj = projected_soc(
+            inp.now,
+            inp.soc,
+            True,
+            charging_active,
+            state.charge_started_at,
+            inp.soc_changed_at,
+            state.anchor,
+            inp.rate,
+        )
+    shown_proj = proj if proj is not None else blind_proj
 
     soc_stale = (
         inp.soc is not None
@@ -558,7 +587,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug=PlugAction.OFF,
             force_disable=True,
             events=tuple(events),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -580,7 +609,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug=PlugAction.UNCHANGED,
             force_disable=False,
             events=tuple(events),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -605,7 +634,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug=PlugAction.ON,
             force_disable=False,
             events=tuple(events) + (Event("emergency_low_soc", {"soc": inp.soc}),),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -645,7 +674,35 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
 
     # ---- 4. in window ----
     if window_open:
-        if inp.mode == ChargeMode.SMART and not soc_trustworthy:
+        if (
+            inp.mode == ChargeMode.SMART
+            and not soc_trustworthy
+            and blind_proj is not None
+            and blind_proj >= inp.target_soc
+            and inp.plug_switch_on
+        ):
+            # R16. Still checked after "untrustworthy" in the sense R6
+            # cares about: blind_proj only exists when a real (if old)
+            # reading does, so a missing reading can never read as
+            # "at target" here.
+            if not state.complete_notified:
+                events.append(
+                    Event(
+                        EVENT_CHARGE_COMPLETE,
+                        {
+                            "confirmed": False,
+                            "reason": "target_reached",
+                            "projected_soc": blind_proj,
+                            "target_soc": inp.target_soc,
+                            "energy_kwh": state.session_energy_kwh,
+                            "source_unreachable": True,
+                        },
+                    )
+                )
+                state = _mark_complete(state, inp.now)
+            plug = PlugAction.OFF
+            reason = "target_reached_unreachable"
+        elif inp.mode == ChargeMode.SMART and not soc_trustworthy:
             # Fail closed, but never fail silent, and only once per
             # window occurrence.
             wid = window_instance_id(inp.now, inp.window_start, inp.window_end)
@@ -733,14 +790,14 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         elif inp.window_close_edge and inp.plug_switch_on:
             if not state.complete_notified:
                 shortfall = None
-                if inp.mode == ChargeMode.SMART and proj is not None:
-                    shortfall = max(0.0, inp.target_soc - proj)
+                if inp.mode == ChargeMode.SMART and shown_proj is not None:
+                    shortfall = max(0.0, inp.target_soc - shown_proj)
                 events.append(
                     Event(
                         EVENT_WINDOW_SHORTFALL,
                         {
                             "mode": inp.mode.value,
-                            "projected_soc": proj,
+                            "projected_soc": shown_proj,
                             "target_soc": inp.target_soc,
                             "shortfall": shortfall,
                             "energy_kwh": state.session_energy_kwh,
@@ -761,7 +818,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         plug=plug,
         force_disable=False,
         events=tuple(events),
-        projected_soc=proj,
+        projected_soc=shown_proj,
         silence_minutes=silence,
         charge_source=charge_source,
         charging_active=charging_active,

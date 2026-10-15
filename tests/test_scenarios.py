@@ -728,3 +728,131 @@ def test_r15_the_window_still_charges_once_the_car_arrives():
     assert decision.charge_source == ChargeSource.PLUG
     assert decision.plug == PlugAction.ON
     assert decision.reason == "below_target"
+
+
+# --------------------------------------------------------------------------- #
+# R16: source unreachable all night; "charge NOT started" push at window
+# open, plug turned on by hand, Smart mode, 80% target -> ran to 97%
+# (2026-10-14). The SoC was untrustworthy for the whole session, so the
+# projection was None and the soc_untrustworthy branch left the plug alone
+# on every tick -- nothing short of the window closing could stop it.
+# --------------------------------------------------------------------------- #
+
+
+def _r16_night(state, *, soc, minutes, window_end=time(16, 0)):
+    """Drive the R16 night: window opens 23:00 with the source down and the
+    last reading carried forward (as source.unreachable_snapshot does), the
+    user switches the plug on by hand 10 minutes later, and the source never
+    comes back. Returns (state, last decision, every decision)."""
+    window_open_at = dt(23, 0)
+    last_reading_at = dt(18, 0)
+    now = window_open_at
+    plug_on = False
+    decisions = []
+    for step in range(minutes // 5 + 1):
+        elapsed = step * 5
+        if elapsed == 10:
+            plug_on = True  # the human, after the push
+        inp = base_inputs().set(
+            now=now,
+            soc=soc,
+            soc_changed_at=last_reading_at,
+            source_reachable=False,
+            plug_switch_on=plug_on,
+            car_charging=False,  # unreachable_snapshot reports False
+            plug_power_w=1800.0 if plug_on else 0.0,
+            rate=RATE,
+            window_start=time(23, 0),
+            window_end=window_end,
+            window_open_edge=(step == 0),
+            target_soc=80.0,
+        ).build()
+        state, decision = reduce(state, inp)
+        decisions.append(decision)
+        if decision.plug == PlugAction.OFF:
+            plug_on = False
+        now += timedelta(minutes=5)
+    return state, decision, decisions
+
+
+def test_r16_unreachable_source_still_stops_a_running_charge_at_target():
+    """From a last-known 50%, 30 points at the seed rate is ~606 minutes.
+    The window (23:00-16:00) is wide enough that window-close cannot be
+    what stops it -- only the projection from the known start SoC can."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    state, _, decisions = _r16_night(state, soc=50.0, minutes=14 * 60)
+
+    # The not-started push still goes out at window open: nothing changed
+    # about failing closed on the START.
+    assert any(e.name.endswith("charge_not_started") for e in decisions[0].events)
+    assert decisions[0].plug == PlugAction.UNCHANGED
+
+    stops = [d for d in decisions if d.plug == PlugAction.OFF]
+    assert stops, "a running Smart charge must stop on projection even with the source down"
+    stop = stops[0]
+    assert stop.reason == "target_reached_unreachable"
+    assert 80.0 <= stop.projected_soc <= 81.0
+    complete = [e for e in stop.events if e.name.endswith("charge_complete")]
+    assert len(complete) == 1
+    assert complete[0].data["confirmed"] is False
+    assert complete[0].data["source_unreachable"] is True
+
+    # And it stays stopped: no restart on a later tick of the same window.
+    after = decisions[decisions.index(stop) + 1 :]
+    assert all(d.plug != PlugAction.ON for d in after)
+    assert sum(
+        e.name.endswith("charge_complete") for d in decisions for e in d.events
+    ) == 1
+
+
+def test_r16_projection_is_shown_while_the_source_is_down():
+    """The sensor must show the blind projection climbing, not 'unknown'
+    -- that is what tells the user something is still in charge."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    _, last, _ = _r16_night(state, soc=50.0, minutes=4 * 60)
+    assert last.charging_active
+    assert last.projected_soc is not None and 50.0 < last.projected_soc < 80.0
+    assert last.reason == "soc_untrustworthy"
+    assert last.plug == PlugAction.UNCHANGED
+
+
+def test_r16_blind_projection_never_starts_a_charge():
+    """Below target with the source down and nothing flowing: still no ON
+    -- the blind projection only ever stops a charge already running."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    inp = base_inputs().set(
+        now=dt(23, 30),
+        soc=50.0,
+        soc_changed_at=dt(18, 0),
+        source_reachable=False,
+        plug_switch_on=False,
+        car_charging=False,
+        plug_power_w=0.0,
+        rate=RATE,
+    ).build()
+    _, decision = reduce(state, inp)
+    assert decision.plug == PlugAction.UNCHANGED
+    assert decision.reason == "soc_untrustworthy"
+
+
+def test_r16_no_reading_at_all_is_never_read_as_at_target():
+    """R6's concern, re-proven here: with no reading at all, the session
+    anchor's fail-closed 100 must not be what a stop is compared against."""
+    state = SessionState(ha_started_at=dt(12, 0))
+    now = dt(23, 0)
+    for step in range(4):
+        inp = base_inputs().set(
+            now=now,
+            soc=None,
+            soc_changed_at=None,
+            source_reachable=False,
+            plug_switch_on=True,
+            car_charging=False,
+            plug_power_w=1800.0,
+            rate=RATE,
+        ).build()
+        state, decision = reduce(state, inp)
+        assert decision.plug != PlugAction.OFF
+        assert decision.projected_soc is None
+        assert not any(e.name.endswith("charge_complete") for e in decision.events)
+        now += timedelta(minutes=5)

@@ -448,7 +448,8 @@ There are no automations here, so there are no traces to step through. One
 | `below_target` | It **is** charging — the plug should be on |
 | `in_window_no_action` | In the window, but something is suppressing a start |
 | `outside_window_not_ours` | Outside the window. Check the window entities, and check the clock |
-| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed |
+| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed: never *starts* a charge. A charge already running (e.g. you switched the plug on by hand) is still projected from the last known reading and stopped at target |
+| `target_reached_unreachable` | Smart mode stopped a running charge at target while the source was unreachable, on the projection from the last known reading alone |
 | `disabled` | `switch.*_enabled` is off |
 | `target_reached` | Already at or over target |
 | `timed_window` | Timed mode, ignoring state of charge |
@@ -518,7 +519,7 @@ The decision core (`logic.py`, `session.py`, `rate_model.py`, `source.py`,
 plain `pytest`, with Home Assistant not installed. That's a tested property,
 not a convention.
 
-`tests/test_scenarios.py` holds fourteen regression scenarios (R1–R14), each
+`tests/test_scenarios.py` holds the regression scenarios (R1–R16), each
 one a real failure that happened once. It is the acceptance gate for any
 change to the decision logic.
 

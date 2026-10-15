@@ -65,6 +65,11 @@ incident:
    like "at or above target" and fire a false completion — that is exactly
    what R6 is a regression test for. Untrustworthy-SoC must be ruled out
    before target is ever compared.
+   The one target comparison allowed while the SoC is untrustworthy is
+   R16's: a charge already flowing on our plug, with a real (if old)
+   reading, projected from that reading and stopped at target
+   (`target_reached_unreachable`). It needs `inp.soc` to be present, so
+   the fail-closed 100 is never what it compares against.
 5. **Outside window** (`logic.py:536` onward) — restart-reconcile, then
    window-close, then "we turned it on so we turn it off", then leave
    alone. A restart with an `UNKNOWN` owner and the plug already on must
@@ -156,5 +161,5 @@ regress if broken:
   26-point incident).
 - [ ] A restart with an unknown owner and the plug on still resolves to OFF,
   not "leave it alone" (R1, R4, R8).
-- [ ] `tests/test_scenarios.py` still passes in full — R1 through R14, no
+- [ ] `tests/test_scenarios.py` still passes in full — R1 through R16, no
   exceptions, no edits to the scenarios themselves.
