@@ -46,6 +46,7 @@ from .const import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_PSACC_URL,
     DEFAULT_TEMP_LIMIT_C,
+    SOURCE_TYPE_NONE,
     SOURCE_TYPE_PSACC,
     DOMAIN,
     MAX_POLL_INTERVAL_SECONDS,
@@ -178,8 +179,8 @@ class EvPlugChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Pick the telemetry source. One option today; the picker exists so
-        adding another is a config-flow step and a registry line, not a
+        """Pick the telemetry source -- or none at all (sources/manual.py).
+        Adding another is a config-flow step and a registry line, not a
         rework (see sources/__init__.py)."""
         if user_input is not None:
             self._data[CONF_SOURCE_TYPE] = user_input[CONF_SOURCE_TYPE]
@@ -191,7 +192,10 @@ class EvPlugChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         source_type = self._data[CONF_SOURCE_TYPE]
         if source_type == SOURCE_TYPE_PSACC:
             return await self.async_step_psacc()
-        # Unreachable while SOURCE_LABELS has one entry, but keeps the
+        if source_type == SOURCE_TYPE_NONE:
+            # Nothing to configure and nothing to connection-test.
+            return await self.async_step_actuator()
+        # Unreachable while every SOURCE_LABELS entry has a branch, but keeps the
         # failure explicit if a registry entry ever lands without a step.
         return self.async_abort(reason="unsupported_source")
 
@@ -254,6 +258,10 @@ class EvPlugChargingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         source_type = data.get(CONF_SOURCE_TYPE, SOURCE_TYPE_PSACC)
         if source_type == SOURCE_TYPE_PSACC:
             return f"{source_type}::{data[CONF_PSACC_URL]}::{data[CONF_VIN]}"
+        if source_type == SOURCE_TYPE_NONE:
+            # No vehicle to identify; the plug is what makes two entries
+            # distinct (two cars, two plugs).
+            return f"{source_type}::{data[CONF_PLUG_SWITCH]}"
         return f"{source_type}::{data.get(CONF_VIN, '')}"
 
     @staticmethod

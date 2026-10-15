@@ -1,5 +1,7 @@
 """Runtime-tunable numbers: target SoC, emergency min-SoC, expected
-reporting gap, and the "delivering power" threshold.
+reporting gap, and the "delivering power" threshold -- plus "Current SoC",
+the one number that is not a setting but a reading a person supplies (see
+CurrentSocNumber).
 
 All four are entities rather than config options because they are things
 you change from a dashboard, not once at setup. The power threshold in
@@ -71,7 +73,18 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: EvPlugChargingCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([SettingNumber(coordinator, entry, spec) for spec in _SPECS])
+    source = coordinator.source
+    reports_live = source is None or source.reports_live
+    specs = [
+        spec
+        for spec in _SPECS
+        # The reporting gap describes a live feed; with none there is
+        # nothing for it to tune.
+        if reports_live or spec.key != "expected_gap_minutes"
+    ]
+    entities: list[NumberEntity] = [SettingNumber(coordinator, entry, spec) for spec in specs]
+    entities.append(CurrentSocNumber(coordinator, entry))
+    async_add_entities(entities)
 
 
 class SettingNumber(EvPlugChargingEntity, RestoreEntity, NumberEntity):
@@ -103,4 +116,36 @@ class SettingNumber(EvPlugChargingEntity, RestoreEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.request_settings_update(**{self._spec.key: value})
+        self.async_write_ha_state()
+
+
+class CurrentSocNumber(EvPlugChargingEntity, NumberEntity):
+    """The state of charge, as a person reads it off the car.
+
+    Setting it hands the value to the coordinator as a manual reading
+    (coordinator.async_set_manual_soc); logic.effective_reading decides
+    when it outranks telemetry and when one charge has spent it. Shows the
+    value only while it IS the reading in force, unknown otherwise -- a
+    number left showing last night's 50% would invite confirming it again.
+
+    Deliberately not a RestoreEntity: the value it shows is derived, and
+    the reading itself is persisted with the rest of SessionState.
+    """
+
+    _attr_mode = NumberMode.BOX
+    _attr_icon = "mdi:battery-sync"
+    _attr_native_unit_of_measurement = "%"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+
+    def __init__(self, coordinator: EvPlugChargingCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "current_soc", "Current SoC")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.manual_soc
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_manual_soc(value)
         self.async_write_ha_state()

@@ -36,6 +36,14 @@ automatically inherits that check.
 - `supports_refresh: bool` — `False` by default. If your source has no way
   to request a fresh reading on demand, leave it `False`; the rescue-wakeup
   gate then quietly never fires for this source rather than erroring.
+- `reports_live: bool` — `True` by default. `False` only for a source that
+  never reports state of charge on its own (`sources/manual.py`, "No
+  telemetry"): the coordinator then tells `reduce()`
+  (`Inputs.source_reports_live`) so Smart's "charge started" push comes
+  from plug power instead of the car's status, and the platforms skip the
+  entities that only describe a live feed. Like `supports_aux_battery`,
+  this is a *capability* the core reads, not normalisation it does on the
+  source's behalf.
 - `from_config(session, config) -> TelemetrySource` — build an instance from
   the merged `entry.data`/`entry.options` dict.
 - `async_fetch(now, prev) -> TelemetrySnapshot` — the routine poll. Must

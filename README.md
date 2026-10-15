@@ -130,10 +130,13 @@ Manually: copy `custom_components/ev_plug_charging` into your config's
 
 **Settings → Devices & Services → Add Integration → EV Plug Charging.**
 
-**Step 1 — telemetry source.** Where the battery level comes from. Today the
-only option is PSA Car Controller.
+**Step 1 — telemetry source.** Where the battery level comes from: PSA Car
+Controller, or **No telemetry** — you tell it the state of charge when a
+charge should start (see
+[Telling it the state of charge yourself](#telling-it-the-state-of-charge-yourself)).
 
-**Step 2 — the source's settings.** For PSACC:
+**Step 2 — the source's settings.** No telemetry has none and skips
+straight to step 3. For PSACC:
 
 | Field | What it is |
 |---|---|
@@ -186,6 +189,7 @@ in config:
 | Entity | Purpose |
 |---|---|
 | `number.*_target_soc` | Stop charging at this %. |
+| `number.*_current_soc` | The state of charge as **you** read it off the car. Setting it starts a Smart charge that couldn't start without a trustworthy reading — see [below](#telling-it-the-state-of-charge-yourself). |
 | `time.*_window_start` / `*_window_end` | The charging window (can wrap midnight). |
 | `select.*_charge_mode` | `Smart` (stop on state of charge) or `Timed` (stop at window end, ignore state of charge). |
 | `switch.*_enabled` | Master switch. Off: observes and reports, never touches the plug. |
@@ -196,7 +200,8 @@ in config:
 | `switch.*_daily_wakeup` | Off by default. A scheduled refresh outside any session, so the first projection of the night isn't working from a days-old reading. Only created if the source can be asked to refresh. |
 | `time.*_daily_wakeup_time` | When that fires — default 06:00. Skipped automatically if a session is already running, the reading is already fresh, or the source is unreachable. |
 
-Read-only sensors: `*_battery_soc` (last real reading), `*_projected_soc`
+Read-only sensors: `*_battery_soc` (the reading in use — attribute
+`soc_origin` says `telemetry` or `manual`), `*_projected_soc`
 (**the one that gates the stop**), `*_charge_needed`,
 `*_estimated_charge_time`, `*_soc_silence`, `*_minutes_per_percent` (the
 learned rate), `*_charge_started_at`, `*_charge_source`,
@@ -211,7 +216,52 @@ Buttons: `*_refresh_source`, `*_reset_rate_learning`.
 
 If your source exposes the vehicle's 12 V battery (PSACC does), four more
 sensors and a binary sensor appear — see
-[12 V auxiliary battery](#12-v-auxiliary-battery).
+[12 V auxiliary battery](#12-v-auxiliary-battery). With **No telemetry**,
+the entities that only describe a live feed are not created:
+`*_soc_silence`, `*_soc_stale`, `*_source_reachable`,
+`*_charging_bypassed`, the expected-report-gap number, and the refresh
+button.
+
+## Telling it the state of charge yourself
+
+Smart mode never *starts* a charge without a state of charge it can trust.
+When it has none — PSACC unreachable, or no telemetry configured at all —
+the `charge_not_started` push becomes a question:
+
+> The car's data source is unreachable. Last reading: 50% at 18:00. Still
+> 50%? Confirm to charge to 80%, or reply with the current state of charge.
+>
+> **[Yes, 50%]** **[Enter SoC]**
+
+Tap **Yes**, or reply with a number, and the charge starts on that tick. The
+answer is a reading like any other: the session is anchored on it, projected
+forward, and stopped at target exactly as a telemetry-fed one would be.
+Three ways to give it, all equivalent:
+
+- the push's buttons (companion-app `notify.<device>` targets only — a
+  `notify.*` entity can't carry buttons, so its message points at the
+  dashboard instead);
+- `number.*_current_soc` on a dashboard;
+- the `ev_plug_charging.set_soc` service, for automations.
+
+It is honoured only while it is the best thing available:
+
+- **A real reading that arrives later replaces it.**
+- **One answer starts one charge.** Once that charge completes, the number
+  describes a battery that no longer exists, so the next window asks again
+  rather than charging a second time from the same start.
+- **A button tapped after the window closed is ignored**, so "yes" the next
+  morning can't start a charge from last night's value.
+
+Answering *during* a charge you started by hand corrects that session's
+start the same way a late real reading would.
+
+With **No telemetry**, every Smart charge starts this way. What you don't
+get without telemetry, because each needs the car itself to report: bypass
+detection, the car's own "finished" report, 12 V tracking, the rescue and
+daily wakeups, and rate learning (there is never an end reading, so the
+charge rate is always the one computed from capacity and current). `Timed`
+mode needs no state of charge at all.
 
 > **`binary_sensor.*_in_charge_window` is display-only.** Never gate an
 > automation on it. The clock tick and the window-boundary callback are
@@ -333,7 +383,9 @@ source-agnostic equivalent) and the 400 V traction battery's state of health
 Every reportable condition fires `ev_plug_charging_<name>` on the event bus,
 whether or not any notification target is configured:
 
-`charge_started`, `charge_not_started`, `charge_complete`,
+`charge_started`, `charge_not_started` (carrying `last_soc`, `last_soc_at`,
+`target_soc` and `window_id` — what the question above is built from),
+`charge_complete`,
 `window_shortfall`, `soc_stale`, `refresh_attempted`, `bypass_detected`,
 `overheat_cutoff`, `evse_no_power`, `soc_full`, `restart_reconciled_off`,
 `aux_battery_low`, `aux_battery_critical`.
@@ -386,6 +438,9 @@ push.
 
 ## Services
 
+- **`ev_plug_charging.set_soc`** — supply the state of charge (`soc`, 0–100)
+  by hand; see
+  [Telling it the state of charge yourself](#telling-it-the-state-of-charge-yourself).
 - **`ev_plug_charging.refresh_source`** — manually request a fresh reading,
   the same act as the automatic rescue wakeup.
 - **`ev_plug_charging.reset_rate_learning`** — clear the learned-rate
@@ -448,7 +503,7 @@ There are no automations here, so there are no traces to step through. One
 | `below_target` | It **is** charging — the plug should be on |
 | `in_window_no_action` | In the window, but something is suppressing a start |
 | `outside_window_not_ours` | Outside the window. Check the window entities, and check the clock |
-| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed: never *starts* a charge. A charge already running (e.g. you switched the plug on by hand) is still projected from the last known reading and stopped at target |
+| `soc_untrustworthy` | No reading, or the source is unreachable. Fails closed: never *starts* a charge until you [give it one](#telling-it-the-state-of-charge-yourself). A charge already running (e.g. you switched the plug on by hand) is still projected from the last known reading and stopped at target |
 | `target_reached_unreachable` | Smart mode stopped a running charge at target while the source was unreachable, on the projection from the last known reading alone |
 | `disabled` | `switch.*_enabled` is off |
 | `target_reached` | Already at or over target |
@@ -504,7 +559,8 @@ anchor, the rate model and the full persisted state.
   session does. If you need durable cumulative figures, point a
   `utility_meter` at your plug's own energy sensor.
 - **`Timed` mode has no state-of-charge awareness at all.** It exists for a
-  plug that's sometimes used by a car with no telemetry.
+  plug that's sometimes used by a car with no telemetry. For a Smart charge
+  without telemetry, use the **No telemetry** source.
 
 ## Development
 

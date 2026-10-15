@@ -40,6 +40,9 @@ CONFIG_VERSION = 4
 # normalised TelemetrySnapshot. See sources/__init__.py for how to add one.
 CONF_SOURCE_TYPE = "source_type"
 SOURCE_TYPE_PSACC = "psacc"
+# No vehicle telemetry at all: the only state of charge is one a person
+# supplies (sources/manual.py). Persisted in config entries -- never rename.
+SOURCE_TYPE_NONE = "none"
 
 # --- Config flow: PSACC source step -----------------------------------------
 CONF_PSACC_URL = "psacc_url"
@@ -270,6 +273,18 @@ SERVICE_MARK_COMPLETION_NOTIFIED = "mark_completion_notified"
 SERVICE_REFRESH_SOURCE = "refresh_source"
 SERVICE_RESET_RATE_LEARNING = "reset_rate_learning"
 SERVICE_VEHICLE_COMMAND = "vehicle_command"
+SERVICE_SET_SOC = "set_soc"
+
+# The confirm-start-SoC prompt (notify.py) and its answer
+# (coordinator._on_notification_action). An action id is
+# "<prefix>|<entry_id>|<window_id>": the entry so two cars never answer each
+# other's question, the window so a "yes" tapped the next morning cannot
+# start a charge from last night's number.
+SOC_ACTION_CONFIRM = "EVPC_SOC_CONFIRM"
+SOC_ACTION_SET = "EVPC_SOC_SET"
+SOC_PROMPT_TAG = "ev-plug-charging-soc"
+# Home Assistant companion app's event for a tapped notification action.
+EVENT_MOBILE_APP_NOTIFICATION_ACTION = "mobile_app_notification_action"
 
 # --- Abstract vehicle-command API (sources/base.py's TelemetrySource.
 # supported_commands / async_vehicle_command) --------------------------------

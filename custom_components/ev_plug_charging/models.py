@@ -212,6 +212,16 @@ class SessionState:
     # has completed with enough qualifying samples.
     measured_ac_power_kw: Optional[float] = None
 
+    # -- a state of charge a PERSON supplied (the confirm prompt, the
+    # manual-SoC number entity, or the set_soc service) and when. See
+    # logic.effective_reading for when it outranks telemetry and when it
+    # is spent. `prev_manual_soc_at` is edge detection only: the instant
+    # a new manual value is first seen counts as a fresh reading, so it
+    # can correct a provisional anchor exactly like a real one. --
+    manual_soc: Optional[float] = None
+    manual_soc_at: Optional[datetime] = None
+    prev_manual_soc_at: Optional[datetime] = None
+
 
 @dataclass(frozen=True)
 class Inputs:
@@ -258,6 +268,13 @@ class Inputs:
     daily_wakeup_enabled: bool = False
     daily_wakeup_time: time = time(6, 0)
 
+    # False for a source that never reports state of charge on its own
+    # (TelemetrySource.reports_live) -- the only SoC it ever has is one a
+    # person typed in. Paths that assume a live feed (the Smart-mode
+    # "charge started" push, keyed on the car's own status) fall back to
+    # plug-side evidence instead.
+    source_reports_live: bool = True
+
 
 @dataclass(frozen=True)
 class Event:
@@ -282,3 +299,8 @@ class Decision:
     soc_stale: bool
     request_refresh: bool
     reason: str
+    # The state of charge this decision was actually made from, and where
+    # it came from: "telemetry", "manual" (see logic.effective_reading), or
+    # None with no reading at all. Display only.
+    soc: Optional[float] = None
+    soc_origin: Optional[str] = None

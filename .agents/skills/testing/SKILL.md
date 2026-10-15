@@ -63,6 +63,23 @@ SETUPTOOLS_USE_DISTUTILS=stdlib pip install -r requirements-test.txt
 pip uninstall -y aiodns pycares   # see below
 ```
 
+`SETUPTOOLS_USE_DISTUTILS=stdlib` only works where the standard library
+still has `distutils`, which Python 3.12 removed — on 3.12/3.13 that
+recipe fails building `mock-open` (`No module named 'distutils'`). What
+does work there is `uv`, with no build-tool overrides at all:
+
+```bash
+uv venv -p 3.12 .venv
+VIRTUAL_ENV=.venv uv pip install --prerelease=allow -r requirements-test.txt tzdata
+VIRTUAL_ENV=.venv uv pip uninstall aiodns pycares
+```
+
+(`--prerelease=allow` because `homeassistant==2025.1.4` pins
+`aiohasupervisor==0.2.2b5`.) A tier-2 test that sets up a config entry
+must request the `aioclient_mock` fixture even when it makes no HTTP call:
+`async_create_source()` always creates HA's client session, and without
+`aiodns` installed the real session's resolver raises.
+
 Use an isolated venv rather than the system Python — resolving `ruff` or
 `pytest` from the wrong environment has already produced a false "clean"
 report in this project once (a different `ruff` binary silently missed an

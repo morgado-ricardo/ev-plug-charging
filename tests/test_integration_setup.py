@@ -1064,3 +1064,292 @@ def test_logbook_platform_describes_the_actuation_event():
 
     result_off = describe(_StubEvent(data={"action": "off", "reason": "target_reached"}))
     assert "turned the plug off" in result_off["message"]
+
+
+# --------------------------------------------------------------------------- #
+# Manual state of charge and the no-telemetry source
+# --------------------------------------------------------------------------- #
+
+
+async def _setup_no_telemetry_entry(hass, plug_switch="switch.plug", plug_power="sensor.plug_power"):
+    from ev_plug_charging.const import (
+        CONF_BATTERY_CAPACITY_KWH,
+        CONF_CHARGE_CURRENT_A,
+        CONF_PLUG_POWER_SENSOR,
+        CONF_PLUG_SWITCH,
+        CONF_POLL_INTERVAL,
+        CONF_SOURCE_TYPE,
+        CONF_TEMP_LIMIT,
+        CONFIG_VERSION,
+        DOMAIN,
+        SOURCE_TYPE_NONE,
+    )
+
+    hass.states.async_set(plug_switch, "off")
+    hass.states.async_set(plug_power, "0")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=CONFIG_VERSION,
+        data={
+            CONF_SOURCE_TYPE: SOURCE_TYPE_NONE,
+            CONF_PLUG_SWITCH: plug_switch,
+            CONF_PLUG_POWER_SENSOR: plug_power,
+            CONF_BATTERY_CAPACITY_KWH: 50.0,
+            CONF_CHARGE_CURRENT_A: 8.0,
+            CONF_TEMP_LIMIT: 65.0,
+            CONF_POLL_INTERVAL: 120,
+        },
+    )
+    entry.add_to_hass(hass)
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry, turn_on
+
+
+def _entity_id(hass, entry, platform, key):
+    from homeassistant.helpers import entity_registry as er
+
+    from ev_plug_charging.const import DOMAIN
+
+    return er.async_get(hass).async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{key}")
+
+
+#: Created only for a source that reports on its own. The PSACC test below
+#: asserts each of these DOES exist there, so a wrong key here can't make
+#: the no-telemetry test pass vacuously.
+_LIVE_FEED_ENTITIES = (
+    ("binary_sensor", "soc_stale"),
+    ("binary_sensor", "source_reachable"),
+    ("binary_sensor", "bypassed"),
+    ("sensor", "soc_silence_minutes"),
+    ("number", "expected_gap_minutes"),
+    ("button", "refresh_source"),
+)
+
+
+def _at_window_time():
+    """23:30 local today -- inside the default 23:00-07:00 window."""
+    return dt_util.now().replace(hour=23, minute=30, second=0, microsecond=0)
+
+
+async def test_config_flow_no_telemetry_skips_the_source_step(hass):
+    from homeassistant.data_entry_flow import FlowResultType
+
+    from ev_plug_charging.const import (
+        CONF_PLUG_ENERGY_SENSOR,
+        CONF_PLUG_POWER_SENSOR,
+        CONF_PLUG_SWITCH,
+        CONF_SOURCE_TYPE,
+        DOMAIN,
+        SOURCE_TYPE_NONE,
+    )
+
+    hass.states.async_set("switch.plug", "off")
+    hass.states.async_set("sensor.plug_power", "0")
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_SOURCE_TYPE: SOURCE_TYPE_NONE}
+    )
+    assert result["step_id"] == "actuator"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_PLUG_SWITCH: "switch.plug", CONF_PLUG_POWER_SENSOR: "sensor.plug_power"},
+    )
+    assert result["step_id"] == "advanced"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PLUG_ENERGY_SENSOR: "sensor.plug_energy"}
+    )
+    await hass.async_block_till_done()
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SOURCE_TYPE] == SOURCE_TYPE_NONE
+    assert result["result"].unique_id == "none::switch.plug"
+
+
+async def test_no_telemetry_entry_hides_live_feed_entities(hass, aioclient_mock):
+    from unittest.mock import patch
+
+    noon = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=noon):
+        entry, _ = await _setup_no_telemetry_entry(hass)
+
+    for platform, key in _LIVE_FEED_ENTITIES:
+        assert _entity_id(hass, entry, platform, key) is None, key
+    assert _entity_id(hass, entry, "number", "current_soc") is not None
+    assert _entity_id(hass, entry, "sensor", "projected_soc") is not None
+
+
+async def test_psacc_entry_keeps_live_feed_entities_and_gains_current_soc(hass, aioclient_mock):
+    from unittest.mock import patch
+
+    noon = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=noon):
+        entry, _ = await _setup_entry(hass, aioclient_mock)
+    for platform, key in _LIVE_FEED_ENTITIES:
+        assert _entity_id(hass, entry, platform, key) is not None, key
+    assert _entity_id(hass, entry, "number", "current_soc") is not None
+
+
+async def test_no_telemetry_never_requests_a_refresh(hass, aioclient_mock):
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import DOMAIN
+
+    noon = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=noon):
+        entry, _ = await _setup_no_telemetry_entry(hass)
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        inputs = coordinator._build_inputs(noon, False, False)  # noqa: SLF001
+    assert inputs.rescue_refresh_enabled is False
+    assert inputs.source_reports_live is False
+
+
+async def test_set_soc_service_starts_the_charge_in_the_window(hass, aioclient_mock):
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import DOMAIN, SERVICE_SET_SOC
+    from ev_plug_charging.models import PlugAction
+
+    from ev_plug_charging.const import EVENT_PLUG_COMMANDED
+
+    commanded = []
+    hass.bus.async_listen(EVENT_PLUG_COMMANDED, lambda e: commanded.append(e.data))
+
+    at = _at_window_time()
+    with patch("homeassistant.util.dt.now", return_value=at):
+        entry, _ = await _setup_no_telemetry_entry(hass)
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        assert coordinator.last_decision.reason == "soc_untrustworthy"
+
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SOC,
+            {"config_entry_id": entry.entry_id, "soc": 45},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert coordinator.last_decision.plug == PlugAction.ON
+    assert coordinator.last_decision.soc_origin == "manual"
+    # The integration's own audit event for an actuation (the switch
+    # domain's real services replace a mock once our switch platform
+    # loads, so the call itself isn't observable here).
+    assert [c["reason"] for c in commanded] == ["below_target"]
+    assert coordinator.manual_soc == 45.0
+    soc_entity = _entity_id(hass, entry, "sensor", "soc")
+    assert hass.states.get(soc_entity).state == "45.0"
+    assert hass.states.get(soc_entity).attributes["soc_origin"] == "manual"
+
+
+async def test_current_soc_number_reaches_the_coordinator(hass, aioclient_mock):
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import DOMAIN
+
+    at = _at_window_time()
+    with patch("homeassistant.util.dt.now", return_value=at):
+        entry, _ = await _setup_no_telemetry_entry(hass)
+        number = _entity_id(hass, entry, "number", "current_soc")
+        assert hass.states.get(number).state == "unknown"
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": number, "value": 52}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    assert coordinator.manual_soc == 52.0
+    assert hass.states.get(number).state == "52.0"
+
+
+@pytest.mark.parametrize(
+    ("entry_matches", "window_matches", "honoured"),
+    [(True, True, True), (False, True, False), (True, False, False)],
+)
+async def test_notification_answer_is_scoped_to_entry_and_window(
+    hass, aioclient_mock, entry_matches, window_matches, honoured
+):
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import (
+        DOMAIN,
+        EVENT_MOBILE_APP_NOTIFICATION_ACTION,
+        SOC_ACTION_SET,
+    )
+    from ev_plug_charging.logic import window_instance_id
+
+    at = _at_window_time()
+    with patch("homeassistant.util.dt.now", return_value=at):
+        entry, _ = await _setup_no_telemetry_entry(hass)
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        settings = coordinator.settings
+        wid = window_instance_id(at, settings.window_start, settings.window_end)
+        action = "|".join(
+            [
+                SOC_ACTION_SET,
+                entry.entry_id if entry_matches else "someone-else",
+                wid if window_matches else "1999-01-01",
+            ]
+        )
+        hass.bus.async_fire(
+            EVENT_MOBILE_APP_NOTIFICATION_ACTION, {"action": action, "reply_text": "61%"}
+        )
+        await hass.async_block_till_done()
+
+    assert (coordinator.manual_soc == 61.0) is honoured
+
+
+async def test_charge_not_started_push_carries_the_question(hass):
+    from ev_plug_charging.const import CONF_NOTIFY_TARGETS, DOMAIN, SOC_PROMPT_TAG
+    from ev_plug_charging.models import Event
+    from ev_plug_charging.notify import async_dispatch_events
+
+    calls = async_mock_service(hass, "notify", "phone")
+    entry = MockConfigEntry(domain=DOMAIN, options={CONF_NOTIFY_TARGETS: ["notify.phone"]})
+    entry.add_to_hass(hass)
+    await async_dispatch_events(
+        hass,
+        entry,
+        [
+            Event(
+                name=f"{DOMAIN}_charge_not_started",
+                data={
+                    "reason": "source_unreachable",
+                    "last_soc": 50.0,
+                    "last_soc_at": "2026-09-12T18:00:00+00:00",
+                    "target_soc": 80.0,
+                    "window_id": "2026-09-12",
+                },
+            )
+        ],
+    )
+    assert len(calls) == 1
+    payload = calls[0].data
+    assert "Still 50%?" in payload["message"]
+    assert payload["data"]["tag"] == SOC_PROMPT_TAG
+    assert [a["title"] for a in payload["data"]["actions"]] == ["Yes, 50%", "Enter SoC"]
+    assert entry.entry_id in payload["data"]["actions"][0]["action"]
+
+
+async def test_charge_not_started_to_a_notify_entity_points_at_the_dashboard(hass):
+    from ev_plug_charging.const import CONF_NOTIFY_TARGETS, DOMAIN
+    from ev_plug_charging.models import Event
+    from ev_plug_charging.notify import async_dispatch_events
+
+    hass.states.async_set("notify.phone_entity", "unknown")
+    calls = async_mock_service(hass, "notify", "send_message")
+    entry = MockConfigEntry(domain=DOMAIN, options={CONF_NOTIFY_TARGETS: ["notify.phone_entity"]})
+    entry.add_to_hass(hass)
+    await async_dispatch_events(
+        hass,
+        entry,
+        [
+            Event(
+                name=f"{DOMAIN}_charge_not_started",
+                data={"reason": "no_reading", "last_soc": None, "target_soc": 80.0, "window_id": "w"},
+            )
+        ],
+    )
+    assert len(calls) == 1
+    assert "data" not in calls[0].data
+    assert "Current SoC" in calls[0].data["message"]

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..const import CONF_SOURCE_TYPE, SOURCE_TYPE_PSACC
+from ..const import CONF_SOURCE_TYPE, SOURCE_TYPE_NONE, SOURCE_TYPE_PSACC
 from .base import (
     SourceConnectionError,
     SourceError,
@@ -30,6 +30,7 @@ from .base import (
     SourceResponseError,
     TelemetrySource,
 )
+from .manual import NoTelemetrySource
 from .psacc import PsaccSource
 
 __all__ = [
@@ -44,14 +45,16 @@ __all__ = [
     "get_source_class",
 ]
 
-#: source_type -> implementation. One entry today; see the module docstring.
+#: source_type -> implementation; see the module docstring.
 SOURCES: dict[str, type[TelemetrySource]] = {
     SOURCE_TYPE_PSACC: PsaccSource,
+    SOURCE_TYPE_NONE: NoTelemetrySource,
 }
 
 #: Labels for the config-flow picker, in display order.
 SOURCE_LABELS: dict[str, str] = {
     SOURCE_TYPE_PSACC: "PSA Car Controller (PSACC)",
+    SOURCE_TYPE_NONE: "No telemetry (enter the state of charge yourself)",
 }
 
 

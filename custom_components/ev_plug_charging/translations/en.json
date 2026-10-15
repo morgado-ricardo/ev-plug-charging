@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Where does the state of charge come from?",
-        "description": "Pick the telemetry source for your vehicle's battery level. More sources are coming — today only PSA Car Controller is supported.",
+        "description": "Pick the telemetry source for your vehicle's battery level, or \"No telemetry\" to enter the state of charge yourself when a charge should start.",
         "data": {
           "source_type": "Telemetry source"
         }
@@ -43,7 +43,7 @@
       "invalid_response": "PSACC returned an unexpected response."
     },
     "abort": {
-      "already_configured": "This PSACC source and VIN are already configured.",
+      "already_configured": "This source and vehicle (or, with no telemetry, this plug) are already configured.",
       "unsupported_source": "That telemetry source is not implemented yet."
     }
   },
@@ -80,7 +80,7 @@
     },
     "ev_plug_charging_charge_not_started": {
       "title": "EV charge not started",
-      "description": "The charge window opened but the car's state of charge could not be trusted, so charging was not started."
+      "description": "The charge window opened but the car's state of charge could not be trusted, so charging was not started. Set 'Current SoC' (or answer the push) to start it."
     },
     "ev_plug_charging_restart_reconciled_off": {
       "title": "EV charge stopped after restart",

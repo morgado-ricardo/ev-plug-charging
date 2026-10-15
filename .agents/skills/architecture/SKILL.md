@@ -82,6 +82,22 @@ after. A human physically or via the UI turning the plug off must not be
 turned back on by the same `reduce()` call that observes the new state — a
 same-tick ordering bug here was a real regression once.
 
+## The effective reading
+
+`reduce()` decides from `logic.effective_reading(state, inp)`, not from
+`inp.soc` directly: a state of charge a person supplied
+(`SessionState.manual_soc`) outranks telemetry while it is newer than
+telemetry's own reading and was given after the last completed charge.
+It is trusted regardless of `source_reachable` -- the person is the source
+-- and a newly supplied value counts as a `fresh_reading_edge`, so an answer
+mid-charge corrects a provisional anchor through the normal one-shot path.
+
+Two things stay on the RAW inputs: `car_status_fresh` (a typed number says
+nothing about the car's cached status), and everything `_finalize` records
+(`prev_soc` seeds the freshness clock after a restart; a manual value there
+would make the next unchanged cached reading look fresh and override the
+answer).
+
 ## The projection
 
 `projected_soc = max(reading_projection, session_projection)`, with a 1.15×

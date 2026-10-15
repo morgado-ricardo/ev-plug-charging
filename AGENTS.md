@@ -40,7 +40,8 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/source.py` | `TelemetrySnapshot`, and the shared freshness clock (`derive_freshness`) every source delegates to. | None |
 | `custom_components/ev_plug_charging/store.py` | Persisted state across restarts (`Store`-backed, but the shape itself is plain data). | None |
 | `custom_components/ev_plug_charging/aux_battery.py` | The 12 V resting-sample ring buffer and health bands. | None |
-| `custom_components/ev_plug_charging/sources/` | `TelemetrySource` ABC (`base.py`), the registry (`__init__.py`), each concrete source (`psacc.py`). | Deferred |
+| `custom_components/ev_plug_charging/prompt.py` | The confirm-start-SoC question as plain data (`soc_prompt`) and the parsing of its answer (`parse_soc_action`, `parse_soc_reply`). | None |
+| `custom_components/ev_plug_charging/sources/` | `TelemetrySource` ABC (`base.py`), the registry (`__init__.py`), each concrete source (`psacc.py`, `manual.py` -- no telemetry at all). | Deferred |
 | `custom_components/ev_plug_charging/coordinator.py` | `DataUpdateCoordinator` subclass: gathers inputs, calls `reduce()` once per tick, actuates, persists, dispatches. A funnel — not where decisions are made. | Yes |
 | `custom_components/ev_plug_charging/config_flow.py` | Setup wizard (source → source settings → plug → advanced) and options flow. | Yes |
 | `custom_components/ev_plug_charging/{sensor,binary_sensor,switch,number,select,time,button}.py` | Entity platforms. Thin: format `Decision`/coordinator state for display, or push a setting via `request_settings_update()`. | Yes |
@@ -53,8 +54,8 @@ existing code picks. It is not arbitrary.
 | `tests/test_dashboard_examples.py` | Parses `dashboard*.yaml` and the platform modules; fails if a dashboard entity ID doesn't match an entity this integration actually creates. | None |
 
 **"None" above is a tested property, not a description.** `models.py`,
-`logic.py`, `session.py`, `rate_model.py`, `source.py`, `store.py` and
-`aux_battery.py` must import nothing from `homeassistant` and nothing
+`logic.py`, `session.py`, `rate_model.py`, `source.py`, `store.py`,
+`aux_battery.py` and `prompt.py` must import nothing from `homeassistant` and nothing
 third-party. That is what lets the decision core be unit-tested with Home
 Assistant not even installed. `sources/psacc.py` and `__init__.py` need
 HA/`aiohttp` types but defer those imports into function bodies (with
@@ -79,6 +80,14 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   one does, and leaving it alone is what let a manual plug-on run to 97%
   against an 80% target (R16). That projection never starts a charge, and
   never exists with no reading at all.
+- **A state of charge a person supplies is a reading, and it is spent.**
+  `logic.effective_reading` trusts it (the person is the source) while it
+  is newer than telemetry's own reading and was given after the last
+  completed charge -- one answer starts one charge, never two. Decisions
+  run on the effective reading; `_finalize` records the RAW telemetry,
+  because `prev_soc` seeds the freshness clock after a restart and a
+  manual value there would make the next unchanged cached reading look
+  fresh and override the answer.
 - **Never gate an actuation on a `now()`-derived display sensor.** Two code
   paths computing "are we in the window" independently (the tick vs. a
   boundary callback) can momentarily disagree. `reduce()` always re-derives

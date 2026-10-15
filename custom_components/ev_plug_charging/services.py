@@ -1,4 +1,4 @@
-"""Four services:
+"""Five services:
 
 - mark_completion_notified: lets an external automation claim the
   one-push-per-session latch, the same way the car-confirmed "Finished"
@@ -10,6 +10,9 @@
 - reset_rate_learning: clears the rate-model sample buffer. Use after a
   capacity or vehicle change, since stale samples plus a new seed give a
   discontinuous cap.
+- set_soc: supply the state of charge by hand -- the same thing the
+  confirm prompt's answer and number.*_current_soc do, for automations.
+  See logic.effective_reading for when it outranks telemetry.
 - vehicle_command: the abstract vehicle-command API (sources/base.py's
   TelemetrySource.supported_commands / async_vehicle_command). One
   service, not nine, because the vocabulary (const.VEHICLE_COMMANDS) is
@@ -37,12 +40,16 @@ from .const import (
     SERVICE_MARK_COMPLETION_NOTIFIED,
     SERVICE_REFRESH_SOURCE,
     SERVICE_RESET_RATE_LEARNING,
+    SERVICE_SET_SOC,
     SERVICE_VEHICLE_COMMAND,
     VEHICLE_COMMANDS,
 )
 from .sources import SourceConnectionError, SourceError, SourceResponseError
 
 _ENTRY_SCHEMA = vol.Schema({vol.Required("config_entry_id"): cv.string})
+_SET_SOC_SCHEMA = _ENTRY_SCHEMA.extend(
+    {vol.Required("soc"): vol.All(vol.Coerce(float), vol.Range(min=0, max=100))}
+)
 _VEHICLE_COMMAND_SCHEMA = _ENTRY_SCHEMA.extend(
     {
         vol.Required("command"): vol.In(sorted(VEHICLE_COMMANDS)),
@@ -74,6 +81,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
         coordinator = _get_coordinator(hass, call)
         coordinator._session_state = rate_model.reset_samples(coordinator._session_state)  # noqa: SLF001
 
+    async def _set_soc(call: ServiceCall) -> None:
+        coordinator = _get_coordinator(hass, call)
+        await coordinator.async_set_manual_soc(call.data["soc"])
+
     async def _vehicle_command(call: ServiceCall) -> ServiceResponse:
         coordinator = _get_coordinator(hass, call)
         source = coordinator.source
@@ -101,6 +112,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_RESET_RATE_LEARNING, _reset_rate_learning, schema=_ENTRY_SCHEMA
     )
+    hass.services.async_register(DOMAIN, SERVICE_SET_SOC, _set_soc, schema=_SET_SOC_SCHEMA)
     hass.services.async_register(
         DOMAIN,
         SERVICE_VEHICLE_COMMAND,

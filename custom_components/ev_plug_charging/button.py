@@ -20,12 +20,12 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: EvPlugChargingCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            RefreshSourceButton(coordinator, entry),
-            ResetRateLearningButton(coordinator, entry),
-        ]
-    )
+    entities: list[ButtonEntity] = [ResetRateLearningButton(coordinator, entry)]
+    source = coordinator.source
+    if source is None or source.reports_live:
+        # A source with no feed has nothing to refresh (sources/manual.py).
+        entities.insert(0, RefreshSourceButton(coordinator, entry))
+    async_add_entities(entities)
 
 
 class RefreshSourceButton(EvPlugChargingEntity, ButtonEntity):
