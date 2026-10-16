@@ -40,21 +40,22 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/source.py` | `TelemetrySnapshot`, and the shared freshness clock (`derive_freshness`) every source delegates to. | None |
 | `custom_components/ev_plug_charging/store.py` | Persisted state across restarts (`Store`-backed, but the shape itself is plain data). | None |
 | `custom_components/ev_plug_charging/aux_battery.py` | The 12 V resting-sample ring buffer and health bands. | None |
-| `custom_components/ev_plug_charging/sources/` | `TelemetrySource` ABC (`base.py`), the registry (`__init__.py`), each concrete source (`psacc.py`). | Deferred |
+| `custom_components/ev_plug_charging/prompt.py` | The confirm-start-SoC question as plain data (`soc_prompt`) and the parsing of its answer (`parse_soc_action`, `parse_soc_reply`). | None |
+| `custom_components/ev_plug_charging/sources/` | `TelemetrySource` ABC (`base.py`), the registry (`__init__.py`), each concrete source (`psacc.py`, `manual.py` -- no telemetry at all). | Deferred |
 | `custom_components/ev_plug_charging/coordinator.py` | `DataUpdateCoordinator` subclass: gathers inputs, calls `reduce()` once per tick, actuates, persists, dispatches. A funnel — not where decisions are made. | Yes |
 | `custom_components/ev_plug_charging/config_flow.py` | Setup wizard (source → source settings → plug → advanced) and options flow. | Yes |
 | `custom_components/ev_plug_charging/{sensor,binary_sensor,switch,number,select,time,button}.py` | Entity platforms. Thin: format `Decision`/coordinator state for display, or push a setting via `request_settings_update()`. | Yes |
 | `custom_components/ev_plug_charging/{notify,repairs,diagnostics,services}.py` | Event dispatch, Repairs, the diagnostics download, the services. | Yes |
 | `custom_components/ev_plug_charging/logbook.py` | Describes `EVENT_PLUG_COMMANDED` for Home Assistant's logbook -- an integration platform, discovered via `manifest.json`'s `after_dependencies`, not an entity platform. | Yes |
 | `custom_components/ev_plug_charging/__init__.py` | `async_setup_entry`, `async_migrate_entry`, platform wiring. | Deferred |
-| `tests/test_scenarios.py` | R1–R15: the regression acceptance gate. | None |
+| `tests/test_scenarios.py` | R1–R16: the regression acceptance gate. | None |
 | `tests/test_*.py` (most others) | Unit tests for the pure core. | None |
 | `tests/test_integration_setup.py` | Config flow, coordinator, entity platforms against real Home Assistant. | Yes |
 | `tests/test_dashboard_examples.py` | Parses `dashboard*.yaml` and the platform modules; fails if a dashboard entity ID doesn't match an entity this integration actually creates. | None |
 
 **"None" above is a tested property, not a description.** `models.py`,
-`logic.py`, `session.py`, `rate_model.py`, `source.py`, `store.py` and
-`aux_battery.py` must import nothing from `homeassistant` and nothing
+`logic.py`, `session.py`, `rate_model.py`, `source.py`, `store.py`,
+`aux_battery.py` and `prompt.py` must import nothing from `homeassistant` and nothing
 third-party. That is what lets the decision core be unit-tested with Home
 Assistant not even installed. `sources/psacc.py` and `__init__.py` need
 HA/`aiohttp` types but defer those imports into function bodies (with
@@ -70,9 +71,27 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   every gate passes: the feed silent past a multiple of the expected
   reporting gap, a session actually in progress, and the source reachable.
   Don't add a second path that can also spend it.
-- **Fail closed, but never fail silent.** A missing or untrustworthy reading
-  must never be treated as good enough to stop on — but the user must always
-  be told why nothing happened.
+- **Fail closed, but never fail silent.** A missing reading must never be
+  treated as good enough to start or stop on — but the user must always be
+  told why nothing happened. An *unreachable* source's last reading is
+  different: it is a real reading, carried forward, just unconfirmed. Smart
+  starts on it at window open and asks (`soc_confirm_requested`), and the
+  R16 projection from it stops the charge at target if nobody answers.
+  Waiting for an answer instead costs the whole night when nobody is awake
+  to give one; leaving a running charge unprojected let a manual plug-on
+  run to 97% against 80% (R16). The one guard: a reading older than the
+  last completed charge is known to be too low, so that case still asks
+  before starting.
+- **A state of charge a person supplies is a reading, and it is spent.**
+  `logic.effective_reading` trusts it (the person is the source) while it
+  is newer than telemetry's own reading and was given after the last
+  completed charge -- one answer starts one charge, never two. "Yes,
+  still X%" is dated when the question was asked (the charge may have run
+  on X for an hour by the tap); a typed value is dated now. Decisions
+  run on the effective reading; `_finalize` records the RAW telemetry,
+  because `prev_soc` seeds the freshness clock after a restart and a
+  manual value there would make the next unchanged cached reading look
+  fresh and override the answer.
 - **Never gate an actuation on a `now()`-derived display sensor.** Two code
   paths computing "are we in the window" independently (the tick vs. a
   boundary callback) can momentarily disagree. `reduce()` always re-derives
@@ -96,7 +115,7 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   `accept_session()`'s gates, it contributes one bounded sample toward the
   working efficiency (`rate_model.record_efficiency_sample`) — but it still
   never feeds a live actuation decision directly.
-- **`tests/test_scenarios.py` (R1–R15) is the acceptance gate** for any
+- **`tests/test_scenarios.py` (R1–R16) is the acceptance gate** for any
   change to `logic.py`, `session.py` or `rate_model.py`. Every scenario in
   it is a real failure that already happened once. A scenario is never
   edited to make a change pass; if one is genuinely wrong, that's a

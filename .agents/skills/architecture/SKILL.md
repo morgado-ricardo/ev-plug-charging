@@ -65,6 +65,15 @@ incident:
    like "at or above target" and fire a false completion — that is exactly
    what R6 is a regression test for. Untrustworthy-SoC must be ruled out
    before target is ever compared.
+   The one target comparison allowed while the SoC is untrustworthy is
+   R16's: a charge already flowing on our plug, with a real (if old)
+   reading, projected from that reading and stopped at target
+   (`target_reached_unreachable`). It needs `inp.soc` to be present, so
+   the fail-closed 100 is never what it compares against. Below target,
+   the same untrustworthy-but-present reading also STARTS a Smart charge
+   (`below_target_unreachable`, plus a `soc_confirm_requested` push) --
+   unless it predates the last completed charge, which makes it known-low;
+   then it asks first, as with no reading at all.
 5. **Outside window** (`logic.py:536` onward) — restart-reconcile, then
    window-close, then "we turned it on so we turn it off", then leave
    alone. A restart with an `UNKNOWN` owner and the plug already on must
@@ -76,6 +85,26 @@ decision, in the "session bookkeeping" block starting `logic.py:238`), not
 after. A human physically or via the UI turning the plug off must not be
 turned back on by the same `reduce()` call that observes the new state — a
 same-tick ordering bug here was a real regression once.
+
+## The effective reading
+
+`reduce()` decides from `logic.effective_reading(state, inp)`, not from
+`inp.soc` directly: a state of charge a person supplied
+(`SessionState.manual_soc`) outranks telemetry while it is newer than
+telemetry's own reading and was given after the last completed charge.
+It is trusted regardless of `source_reachable` -- the person is the source
+-- and a newly supplied value counts as a `fresh_reading_edge`, so an answer
+mid-charge corrects a provisional anchor through the normal one-shot path.
+That correction back-solves from when a manual reading was TRUE
+(`advance_session(reading_at=...)`), not from now: "Yes, still 50%"
+tapped an hour into a charge is dated at the charge start
+(`prompt.confirm_reading_at`), so the anchor stays exactly 50.
+
+Two things stay on the RAW inputs: `car_status_fresh` (a typed number says
+nothing about the car's cached status), and everything `_finalize` records
+(`prev_soc` seeds the freshness clock after a restart; a manual value there
+would make the next unchanged cached reading look fresh and override the
+answer).
 
 ## The projection
 
@@ -156,5 +185,5 @@ regress if broken:
   26-point incident).
 - [ ] A restart with an unknown owner and the plug on still resolves to OFF,
   not "leave it alone" (R1, R4, R8).
-- [ ] `tests/test_scenarios.py` still passes in full — R1 through R14, no
+- [ ] `tests/test_scenarios.py` still passes in full — R1 through R16, no
   exceptions, no edits to the scenarios themselves.

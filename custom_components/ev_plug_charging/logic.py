@@ -14,13 +14,13 @@ callback. Edge triggers lose their state across a restart; timestamps do
 not, and this module has to keep projecting correctly through both a
 restart and hours of telemetry silence.
 
-tests/test_scenarios.py (R1-R14) is the acceptance gate for this module.
+tests/test_scenarios.py (R1-R16) is the acceptance gate for this module.
 Each scenario is a real failure that happened once.
 """
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from .const import (
@@ -34,6 +34,7 @@ from .const import (
     EVENT_OVERHEAT_CUTOFF,
     EVENT_REFRESH_ATTEMPTED,
     EVENT_RESTART_RECONCILED_OFF,
+    EVENT_SOC_CONFIRM_REQUESTED,
     EVENT_SOC_FULL,
     EVENT_SOC_STALE,
     EVENT_WINDOW_SHORTFALL,
@@ -63,7 +64,9 @@ from .models import (
 __all__ = [
     "in_window",
     "window_instance_id",
+    "window_open_at",
     "is_trustworthy_soc",
+    "effective_reading",
     "silence_minutes",
     "projected_soc",
     "classify_source",
@@ -114,10 +117,47 @@ def window_instance_id(now: datetime, start: time, end: time) -> str:
     return open_date.isoformat()
 
 
+def window_open_at(window_id: str, start: time, tzinfo) -> datetime:
+    """The instant the window occurrence named by window_instance_id()
+    opened -- its inverse, for the one caller that needs a time back."""
+    return datetime.combine(date.fromisoformat(window_id), start, tzinfo=tzinfo)
+
+
 def is_trustworthy_soc(soc: Optional[float], source_reachable: bool) -> bool:
     """A valid-looking number from a dead source is as dangerous as no
     number at all."""
     return soc is not None and source_reachable
+
+
+def effective_reading(
+    state: SessionState, inp: Inputs
+) -> tuple[Optional[float], Optional[datetime], bool]:
+    """(soc, soc_changed_at, is_manual): the reading reduce() decides from.
+
+    A value a person supplied (state.manual_soc, via the confirm prompt,
+    the manual-SoC entity or the set_soc service) outranks telemetry only
+    while BOTH hold:
+
+    - it is newer than telemetry's own reading -- a real report arriving
+      afterwards supersedes it, the same way a fresh reading supersedes a
+      stale one;
+    - it was entered after the last completed charge. One answer anchors
+      one session: once that session completes, the number describes a
+      battery that no longer exists, and the next window has to ask again
+      rather than charge a second time from the same start.
+
+    Trusted by construction once it applies -- the person IS the source,
+    so whether the telemetry source is reachable says nothing about it.
+    """
+    m_soc, m_at = state.manual_soc, state.manual_soc_at
+    if (
+        m_soc is not None
+        and m_at is not None
+        and (inp.soc_changed_at is None or m_at > inp.soc_changed_at)
+        and (state.charge_completed_at is None or m_at > state.charge_completed_at)
+    ):
+        return m_soc, m_at, True
+    return inp.soc, inp.soc_changed_at, False
 
 
 def silence_minutes(
@@ -247,6 +287,15 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     events: list[Event] = []
     state = prev
 
+    # The raw telemetry stays what _finalize records (prev_soc and
+    # prev_soc_changed_at seed source.py's freshness clock after a restart:
+    # a manual value leaking in there would make the next unchanged cached
+    # reading look like a fresh change and override the person's answer).
+    # Everything that DECIDES runs on the effective reading.
+    raw_inp = inp
+    soc, soc_changed_at, soc_is_manual = effective_reading(state, inp)
+    inp = replace(inp, soc=soc, soc_changed_at=soc_changed_at)
+
     plug_delivering = (inp.plug_power_w or 0.0) > inp.power_threshold_w
     # With from_cache=1, a car-status of "charging" can be a cached value
     # that has not been refreshed in a while. Trusting it indefinitely would
@@ -257,8 +306,10 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # point the feed is already known to be unhealthy, and a cached
     # "charging" that old is no more trustworthy than no reading at all.
     # Below it, trust it.
-    car_status_fresh = inp.soc_changed_at is not None and (
-        inp.now - inp.soc_changed_at
+    # Raw telemetry clock: a typed-in SoC says nothing about how old the
+    # car's cached charging status is.
+    car_status_fresh = raw_inp.soc_changed_at is not None and (
+        inp.now - raw_inp.soc_changed_at
     ) <= timedelta(minutes=inp.expected_gap_min * RESCUE_WAKEUP_GAP_MULTIPLE)
     car_charging = inp.car_charging and car_status_fresh
     # OUR plug's power draw is the sole authority on whether a charge is
@@ -280,9 +331,16 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     plug_on_edge = inp.plug_switch_on and not state.prev_plug_switch_on
     plug_off_edge = (not inp.plug_switch_on) and state.prev_plug_switch_on
     charging_active_edge = charging_active and not state.prev_charging_active
-    fresh_reading_edge = (
-        inp.soc_changed_at is not None and inp.soc_changed_at != state.prev_soc_changed_at
-    )
+    if soc_is_manual:
+        # A newly supplied manual value is a fresh reading the instant it
+        # is first seen -- so answering mid-charge corrects a provisional
+        # anchor through session.py's existing one-shot correction.
+        fresh_reading_edge = state.manual_soc_at != state.prev_manual_soc_at
+    else:
+        fresh_reading_edge = (
+            raw_inp.soc_changed_at is not None
+            and raw_inp.soc_changed_at != state.prev_soc_changed_at
+        )
     prev_owner = state.plug_turned_on_by
 
     # Narrower than charging_active_edge (see SessionState.prev_car_charging):
@@ -310,6 +368,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         plug_on_edge=plug_on_edge,
         charging_active_edge=charging_active_edge,
         fresh_reading_edge=fresh_reading_edge,
+        reading_at=inp.soc_changed_at if soc_is_manual else None,
     )
     # Sticky-OR within the session: once true, stays true until
     # advance_session's new_session branch resets it. Runs AFTER
@@ -376,7 +435,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         )
 
     # ---- health signals (computed regardless of branch) ----
-    soc_trustworthy = is_trustworthy_soc(inp.soc, inp.source_reachable)
+    soc_origin = "manual" if soc_is_manual else ("telemetry" if inp.soc is not None else None)
+    soc_trustworthy = soc_is_manual or is_trustworthy_soc(inp.soc, inp.source_reachable)
     silence = silence_minutes(inp.now, inp.soc_changed_at, state.charge_started_at)
     proj = projected_soc(
         inp.now,
@@ -388,9 +448,41 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         state.anchor,
         inp.rate,
     )
+    # A charge already running on OUR plug while the source is unreachable
+    # still has a known starting point: the last reading, carried forward
+    # unchanged by source.unreachable_snapshot() and captured as this
+    # session's anchor. Projecting forward from it is exactly what R1 does
+    # through 790 minutes of silence from a REACHABLE source -- a dead
+    # source gives no less information than a silent one about a charge
+    # that is already flowing. Without this, `proj` is None for the whole
+    # outage and nothing stops the charge short of the window closing
+    # (R16: a manual plug-on after a "source unavailable" push ran to 97%
+    # against an 80% target).
+    #
+    # Used ONLY to stop a charge that is already running, never to start
+    # one: starting still fails closed on soc_untrustworthy below. And
+    # never with no reading at all -- inp.soc None leaves this None, so the
+    # session anchor's fail-closed 100 is never what a stop is compared
+    # against (R6).
+    blind_proj: Optional[float] = None
+    if proj is None and charging_active and inp.soc is not None:
+        blind_proj = projected_soc(
+            inp.now,
+            inp.soc,
+            True,
+            charging_active,
+            state.charge_started_at,
+            inp.soc_changed_at,
+            state.anchor,
+            inp.rate,
+        )
+    shown_proj = proj if proj is not None else blind_proj
 
     soc_stale = (
         inp.soc is not None
+        # The person is the feed: silence after their answer is expected,
+        # not a symptom, and nothing would come of waking the car for it.
+        and not soc_is_manual
         and charging_active
         and inp.soc < inp.target_soc
         and silence > inp.expected_gap_min
@@ -454,13 +546,21 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
 
     since, held = _dwell(plug_delivering, state.power_delivering_since, inp.now)
     state = replace(state, power_delivering_since=since)
+    # Smart mode's own "charge started" push above is keyed on the car's
+    # status; a source that never reports one (source_reports_live False)
+    # would never send it, so it takes this plug-side path too.
     if (
-        inp.mode == ChargeMode.TIMED
+        (inp.mode == ChargeMode.TIMED or not inp.source_reports_live)
         and plug_delivering
         and held * 60 >= TIMED_START_DWELL_SECONDS
     ):
         if not state.timed_start_notified:
-            events.append(Event(EVENT_CHARGE_STARTED, {"source": "plug", "mode": "timed"}))
+            events.append(
+                Event(
+                    EVENT_CHARGE_STARTED,
+                    {"source": "plug", "mode": inp.mode.value, "soc": inp.soc},
+                )
+            )
             state = replace(state, timed_start_notified=True)
     elif not plug_delivering and state.timed_start_notified:
         state = replace(state, timed_start_notified=False)
@@ -554,11 +654,11 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         if not state.overheat_latched:
             events.append(Event(EVENT_OVERHEAT_CUTOFF, {"temp_c": inp.plug_temp_c}))
         state = replace(state, overheat_latched=True)
-        return _finalize(state, inp, charging_active, car_charging, PlugAction.OFF), Decision(
+        return _finalize(state, raw_inp, charging_active, car_charging, PlugAction.OFF), Decision(
             plug=PlugAction.OFF,
             force_disable=True,
             events=tuple(events),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -566,6 +666,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             soc_stale=soc_stale,
             request_refresh=False,
             reason="overheat",
+            soc=inp.soc,
+            soc_origin=soc_origin,
         )
     if state.overheat_latched and (
         inp.plug_temp_c is None or inp.plug_temp_c < inp.temp_limit_c - OVERHEAT_HYSTERESIS_C
@@ -575,12 +677,12 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # ---- 2. not enabled: observe only, never actuate ----
     if not inp.enabled:
         return _finalize(
-            state, inp, charging_active, car_charging, PlugAction.UNCHANGED
+            state, raw_inp, charging_active, car_charging, PlugAction.UNCHANGED
         ), Decision(
             plug=PlugAction.UNCHANGED,
             force_disable=False,
             events=tuple(events),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -588,6 +690,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             soc_stale=soc_stale,
             request_refresh=request_refresh,
             reason="disabled",
+            soc=inp.soc,
+            soc_origin=soc_origin,
         )
 
     # ---- 3. emergency low SoC: Smart only, ignores the window ----
@@ -600,12 +704,12 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     ):
         state = replace(state, plug_turned_on_by=Owner.US)
         return _finalize(
-            state, inp, charging_active, car_charging, PlugAction.ON
+            state, raw_inp, charging_active, car_charging, PlugAction.ON
         ), Decision(
             plug=PlugAction.ON,
             force_disable=False,
             events=tuple(events) + (Event("emergency_low_soc", {"soc": inp.soc}),),
-            projected_soc=proj,
+            projected_soc=shown_proj,
             silence_minutes=silence,
             charge_source=charge_source,
             charging_active=charging_active,
@@ -613,6 +717,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             soc_stale=soc_stale,
             request_refresh=request_refresh,
             reason="emergency_low_soc",
+            soc=inp.soc,
+            soc_origin=soc_origin,
         )
 
     window_open = in_window(
@@ -645,31 +751,104 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
 
     # ---- 4. in window ----
     if window_open:
-        if inp.mode == ChargeMode.SMART and not soc_trustworthy:
-            # Fail closed, but never fail silent, and only once per
-            # window occurrence.
+        if (
+            inp.mode == ChargeMode.SMART
+            and not soc_trustworthy
+            and blind_proj is not None
+            and blind_proj >= inp.target_soc
+            and inp.plug_switch_on
+        ):
+            # R16. Still checked after "untrustworthy" in the sense R6
+            # cares about: blind_proj only exists when a real (if old)
+            # reading does, so a missing reading can never read as
+            # "at target" here.
+            if not state.complete_notified:
+                events.append(
+                    Event(
+                        EVENT_CHARGE_COMPLETE,
+                        {
+                            "confirmed": False,
+                            "reason": "target_reached",
+                            "projected_soc": blind_proj,
+                            "target_soc": inp.target_soc,
+                            "energy_kwh": state.session_energy_kwh,
+                            "source_unreachable": True,
+                        },
+                    )
+                )
+                state = _mark_complete(state, inp.now)
+            plug = PlugAction.OFF
+            reason = "target_reached_unreachable"
+        elif inp.mode == ChargeMode.SMART and not soc_trustworthy:
             wid = window_instance_id(inp.now, inp.window_start, inp.window_end)
             grace_ok = state.ha_started_at is not None and (
                 inp.now - state.ha_started_at
             ).total_seconds() >= WINDOW_START_GRACE_SECONDS
+            # Carries what the confirm prompt needs (notify.py): the last
+            # value to offer back, how old it is, the target it would
+            # charge to, and which window the answer is for -- an answer
+            # for a window that has since closed is ignored.
+            prompt_data = {
+                "last_soc": inp.soc,
+                "last_soc_at": (
+                    inp.soc_changed_at.isoformat() if inp.soc_changed_at is not None else None
+                ),
+                "target_soc": inp.target_soc,
+                "window_id": wid,
+            }
+            # The last reading is still a reading: carried forward unchanged
+            # by source.unreachable_snapshot(), just not confirmed. Waiting
+            # for someone to vouch for it costs every minute until they do,
+            # and an unanswered night costs the whole charge -- so start on
+            # it, and ask. Once current flows, blind_proj (above) projects
+            # from it and stops at target if nobody answers; an answer
+            # corrects the start through session.py's one-shot correction.
+            #
+            # Except when it predates the last completed charge: then it is
+            # known to be too low (that charge happened after it), and
+            # starting from it would overshoot. Ask first, as before.
+            reading_predates_charge = (
+                inp.soc is not None
+                and state.charge_completed_at is not None
+                and (inp.soc_changed_at is None or inp.soc_changed_at <= state.charge_completed_at)
+            )
             if (
-                not charging_active
-                and not inp.plug_switch_on
-                and grace_ok
-                and state.not_started_pushed_for != wid
+                inp.soc is not None
+                and not reading_predates_charge
+                and inp.soc < inp.target_soc
+                and not manual_off_active
+                and not completed_this_window
             ):
-                events.append(
-                    Event(
-                        EVENT_CHARGE_NOT_STARTED,
-                        {
-                            "reason": "no_reading" if inp.soc is None else "source_unreachable",
-                            "last_soc": inp.soc,
-                        },
+                if grace_ok and state.not_started_pushed_for != wid:
+                    events.append(Event(EVENT_SOC_CONFIRM_REQUESTED, prompt_data))
+                    state = replace(state, not_started_pushed_for=wid)
+                if inp.plug_switch_on:
+                    plug = PlugAction.UNCHANGED
+                else:
+                    plug = PlugAction.ON
+                    state = replace(state, plug_turned_on_by=Owner.US)
+                reason = "below_target_unreachable"
+            else:
+                # Fail closed, but never fail silent, and only once per
+                # window occurrence.
+                if (
+                    not charging_active
+                    and not inp.plug_switch_on
+                    and grace_ok
+                    and state.not_started_pushed_for != wid
+                ):
+                    if inp.soc is None:
+                        why = "no_reading"
+                    elif reading_predates_charge:
+                        why = "reading_predates_last_charge"
+                    else:
+                        why = "source_unreachable"
+                    events.append(
+                        Event(EVENT_CHARGE_NOT_STARTED, {"reason": why, **prompt_data})
                     )
-                )
-                state = replace(state, not_started_pushed_for=wid)
-            plug = PlugAction.UNCHANGED
-            reason = "soc_untrustworthy"
+                    state = replace(state, not_started_pushed_for=wid)
+                plug = PlugAction.UNCHANGED
+                reason = "soc_untrustworthy"
         elif inp.mode == ChargeMode.TIMED:
             if manual_off_active:
                 plug = PlugAction.UNCHANGED
@@ -733,14 +912,14 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         elif inp.window_close_edge and inp.plug_switch_on:
             if not state.complete_notified:
                 shortfall = None
-                if inp.mode == ChargeMode.SMART and proj is not None:
-                    shortfall = max(0.0, inp.target_soc - proj)
+                if inp.mode == ChargeMode.SMART and shown_proj is not None:
+                    shortfall = max(0.0, inp.target_soc - shown_proj)
                 events.append(
                     Event(
                         EVENT_WINDOW_SHORTFALL,
                         {
                             "mode": inp.mode.value,
-                            "projected_soc": proj,
+                            "projected_soc": shown_proj,
                             "target_soc": inp.target_soc,
                             "shortfall": shortfall,
                             "energy_kwh": state.session_energy_kwh,
@@ -757,11 +936,11 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             plug = PlugAction.UNCHANGED
             reason = "outside_window_not_ours"
 
-    return _finalize(state, inp, charging_active, car_charging, plug), Decision(
+    return _finalize(state, raw_inp, charging_active, car_charging, plug), Decision(
         plug=plug,
         force_disable=False,
         events=tuple(events),
-        projected_soc=proj,
+        projected_soc=shown_proj,
         silence_minutes=silence,
         charge_source=charge_source,
         charging_active=charging_active,
@@ -769,6 +948,8 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         soc_stale=soc_stale,
         request_refresh=request_refresh,
         reason=reason,
+        soc=inp.soc,
+        soc_origin=soc_origin,
     )
 
 
@@ -784,6 +965,9 @@ def _finalize(
     That includes `plug`: the plug's observed state lags the command by a
     tick, so without recording that WE asked for the off, the next tick
     sees an off on a plug we owned and cannot tell it from a human's.
+
+    `inp` here is always the RAW inputs, never the effective-reading copy
+    reduce() decides from -- see the top of reduce().
     """
     return replace(
         state,
@@ -796,4 +980,5 @@ def _finalize(
         prev_soc=inp.soc,
         prev_soc_changed_at=inp.soc_changed_at,
         prev_mode=inp.mode,
+        prev_manual_soc_at=state.manual_soc_at,
     )

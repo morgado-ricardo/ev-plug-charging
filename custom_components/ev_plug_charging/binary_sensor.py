@@ -24,16 +24,22 @@ async def async_setup_entry(
 ) -> None:
     coordinator: EvPlugChargingCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list = [
-        SocStaleBinarySensor(coordinator, entry),
-        BypassedBinarySensor(coordinator, entry),
         ChargingActiveBinarySensor(coordinator, entry),
         PlugDeliveringPowerBinarySensor(coordinator, entry),
         OverheatingBinarySensor(coordinator, entry),
         InWindowBinarySensor(coordinator, entry),
-        SourceReachableBinarySensor(coordinator, entry),
         CompletionNotifiedBinarySensor(coordinator, entry),
     ]
     source = coordinator.source
+    if source is None or source.reports_live:
+        # Each describes a live feed (staleness, bypass seen through the
+        # car's own status, reachability); with none they would only ever
+        # read a constant. See TelemetrySource.reports_live.
+        entities[:0] = [
+            SocStaleBinarySensor(coordinator, entry),
+            BypassedBinarySensor(coordinator, entry),
+        ]
+        entities.append(SourceReachableBinarySensor(coordinator, entry))
     if source is not None and source.supports_aux_battery:
         entities.append(AuxBatteryLowBinarySensor(coordinator, entry))
     async_add_entities(entities)

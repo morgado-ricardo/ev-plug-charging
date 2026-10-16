@@ -25,6 +25,30 @@ refresh_source:
         config_entry:
           integration: ev_plug_charging
 
+set_soc:
+  name: Set state of charge
+  description: >-
+    Supplies the car's current state of charge by hand, for a source that
+    is unreachable or a setup with no telemetry at all. It is used as the
+    start of the next Smart charge (or corrects the one already running),
+    until a real reading arrives or that charge completes.
+  fields:
+    config_entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: ev_plug_charging
+    soc:
+      name: State of charge
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
 reset_rate_learning:
   name: Reset rate learning
   description: >-

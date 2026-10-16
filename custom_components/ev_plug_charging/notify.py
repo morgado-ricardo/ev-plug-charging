@@ -14,28 +14,35 @@ must not erase the record that the plug was actuated at all.
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from datetime import datetime
+from typing import Any, Iterable, Optional
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_LOGBOOK_ENTRY
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import ServiceNotFound
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_MUTED_EVENTS,
     CONF_NOTIFY_TARGETS,
     DOMAIN,
+    EVENT_CHARGE_NOT_STARTED,
     EVENT_PLUG_COMMANDED,
+    EVENT_SOC_CONFIRM_REQUESTED,
     PERSISTENT_EVENTS,
+    SOC_PROMPT_TAG,
 )
 from .models import Event
+from .prompt import soc_prompt
 
 _LOGGER = logging.getLogger(__name__)
 
 _TITLES = {
     f"{DOMAIN}_charge_started": "EV charging started",
     f"{DOMAIN}_charge_not_started": "EV - charge NOT started",
+    f"{DOMAIN}_soc_confirm_requested": "EV charging from last reading",
     f"{DOMAIN}_charge_complete": "EV charging complete",
     f"{DOMAIN}_window_shortfall": "EV charging stopped (window closed)",
     f"{DOMAIN}_soc_stale": "EV - SoC not updating",
@@ -103,7 +110,7 @@ async def async_dispatch_events(
         short_name = event.name.removeprefix(f"{DOMAIN}_")
         if short_name not in muted:
             for target in targets:
-                await _async_push_one(hass, target, event)
+                await _async_push_one(hass, target, event, entry.entry_id)
 
         if event.name in PERSISTENT_EVENTS:
             _async_raise_repair(hass, entry, event)
@@ -111,13 +118,15 @@ async def async_dispatch_events(
             _async_clear_repair_if_any(hass, entry, event.name)
 
 
-async def _async_push_one(hass: HomeAssistant, target: str, event: Event) -> None:
+async def _async_push_one(
+    hass: HomeAssistant, target: str, event: Event, entry_id: str = ""
+) -> None:
     """One target, fully isolated: a bad target must never stop the
     others, and must never crash the tick that triggered it -- a
     notification is a side channel, and a side channel must never be able
     to take down the main one."""
     try:
-        await _async_push(hass, target, event)
+        await _async_push(hass, target, event, entry_id)
     except (ServiceNotFound, vol.Invalid):
         _LOGGER.warning(
             "Notification target %r rejected the %s event (service not found or "
@@ -130,7 +139,9 @@ async def _async_push_one(hass: HomeAssistant, target: str, event: Event) -> Non
         _LOGGER.exception("Failed to send notification for %s to %r", event.name, target)
 
 
-async def _async_push(hass: HomeAssistant, target: str, event: Event) -> None:
+async def _async_push(
+    hass: HomeAssistant, target: str, event: Event, entry_id: str = ""
+) -> None:
     """Two send paths, because only one of them can carry `data`.
 
     A LEGACY notify.<service> (what mobile_app has always registered, and
@@ -157,10 +168,26 @@ async def _async_push(hass: HomeAssistant, target: str, event: Event) -> None:
 
     title = _TITLES.get(event.name, event.name)
     message = _format_message(event)
+    prompt = (
+        soc_prompt(
+            event.data,
+            entry_id,
+            _local_hhmm(event.data.get("last_soc_at")),
+            charging=event.name == EVENT_SOC_CONFIRM_REQUESTED,
+        )
+        if event.name in (EVENT_CHARGE_NOT_STARTED, EVENT_SOC_CONFIRM_REQUESTED) and entry_id
+        else None
+    )
 
     if hass.services.has_service(domain, service):
-        data = {"tag": "ev-plug-charging", "priority": "high", "ttl": 0}
+        data: dict[str, Any] = {"tag": "ev-plug-charging", "priority": "high", "ttl": 0}
         data.update(_priority_data(event.name))
+        if prompt is not None:
+            message = prompt["message"]
+            data["actions"] = prompt["actions"]
+            # Its own tag, so the next routine push (which all share
+            # "ev-plug-charging") cannot replace the question unanswered.
+            data["tag"] = SOC_PROMPT_TAG
         await hass.services.async_call(
             domain,
             service,
@@ -171,6 +198,9 @@ async def _async_push(hass: HomeAssistant, target: str, event: Event) -> None:
 
     if hass.states.get(target) is not None:
         _warn_once_degraded(hass, target)
+        if prompt is not None:
+            # No `data`, so no buttons on this path -- point at the entity.
+            message = prompt["message_no_actions"]
         await hass.services.async_call(
             "notify",
             "send_message",
@@ -200,6 +230,15 @@ def _warn_once_degraded(hass: HomeAssistant, target: str) -> None:
         "you want critical alerts to reach.",
         target,
     )
+
+
+def _local_hhmm(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return dt_util.as_local(datetime.fromisoformat(value)).strftime("%H:%M")
+    except ValueError:
+        return None
 
 
 def _format_message(event: Event) -> str:

@@ -27,7 +27,6 @@ async def async_setup_entry(
         ProjectedSocSensor(coordinator, entry),
         ChargeNeededSensor(coordinator, entry),
         EstimatedChargeTimeSensor(coordinator, entry),
-        SilenceMinutesSensor(coordinator, entry),
         MinutesPerPercentSensor(coordinator, entry),
         ChargeStartedAtSensor(coordinator, entry),
         ChargeSourceSensor(coordinator, entry),
@@ -38,6 +37,10 @@ async def async_setup_entry(
         TotalEnergySensor(coordinator, entry),
     ]
     source = coordinator.source
+    if source is None or source.reports_live:
+        # Silence since the last report only means something for a feed
+        # that reports; see TelemetrySource.reports_live.
+        entities.append(SilenceMinutesSensor(coordinator, entry))
     if source is not None and source.supports_aux_battery:
         entities.extend(
             [
@@ -66,6 +69,16 @@ class _BaseSensor(EvPlugChargingEntity, SensorEntity):
     def _state_obj(self):
         return (self.coordinator.data or {}).get("state")
 
+    @property
+    def _soc(self):
+        """The reading the last decision was made from -- telemetry, or a
+        manual value while that is in force (logic.effective_reading)."""
+        d = self._decision
+        if d is not None:
+            return d.soc
+        t = self._telemetry
+        return t.soc if t else None
+
 
 class SocSensor(_BaseSensor):
     _attr_icon = "mdi:battery"
@@ -78,8 +91,12 @@ class SocSensor(_BaseSensor):
 
     @property
     def native_value(self):
-        t = self._telemetry
-        return t.soc if t else None
+        return self._soc
+
+    @property
+    def extra_state_attributes(self):
+        d = self._decision
+        return {"soc_origin": d.soc_origin} if d else {}
 
 
 class ProjectedSocSensor(_BaseSensor):
@@ -116,10 +133,10 @@ class ChargeNeededSensor(_BaseSensor):
 
     @property
     def native_value(self):
-        t = self._telemetry
-        if not t or t.soc is None:
+        soc = self._soc
+        if soc is None:
             return None
-        return max(0.0, self.coordinator.settings.target_soc - t.soc)
+        return max(0.0, self.coordinator.settings.target_soc - soc)
 
 
 class EstimatedChargeTimeSensor(_BaseSensor):
@@ -134,10 +151,10 @@ class EstimatedChargeTimeSensor(_BaseSensor):
 
     @property
     def native_value(self):
-        t = self._telemetry
-        if not t or t.soc is None:
+        soc = self._soc
+        if soc is None:
             return None
-        needed = max(0.0, self.coordinator.settings.target_soc - t.soc)
+        needed = max(0.0, self.coordinator.settings.target_soc - soc)
         rate = self.coordinator._effective_rate().minutes_per_percent  # noqa: SLF001
         return round(needed * rate / 60, 1)
 

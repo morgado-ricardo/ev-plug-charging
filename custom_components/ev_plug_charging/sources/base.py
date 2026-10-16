@@ -64,6 +64,16 @@ class TelemetrySource(ABC):
     #: (see binary_sensor.py/sensor.py's async_setup_entry).
     supports_aux_battery: bool = False
 
+    #: False for a source that never reports state of charge on its own --
+    #: the only reading it ever has is one a person supplies (the confirm
+    #: prompt, number.*_current_soc, the set_soc service). The coordinator
+    #: passes it to reduce() (Inputs.source_reports_live) so paths that
+    #: assume a live feed fall back to plug-side evidence, and the entities
+    #: that only describe a live feed (silence, staleness, reachability,
+    #: bypass) are not created. A capability, like the two above -- not
+    #: normalisation, which stays the adapter's job.
+    reports_live: bool = True
+
     #: The vehicle commands this source can execute (const.VEHICLE_COMMANDS
     #: is the full vocabulary). Empty by default -- a source with no
     #: command capability needs no code beyond this. Never touched by

@@ -81,6 +81,9 @@ def to_dict(state: SessionState) -> dict[str, Any]:
         "calib_soc_last": state.calib_soc_last,
         "calib_energy_last": state.calib_energy_last,
         "measured_ac_power_kw": state.measured_ac_power_kw,
+        "manual_soc": state.manual_soc,
+        "manual_soc_at": _dt(state.manual_soc_at),
+        "prev_manual_soc_at": _dt(state.prev_manual_soc_at),
     }
 
 
@@ -169,4 +172,7 @@ def from_dict(data: dict[str, Any] | None) -> SessionState:
         calib_soc_last=data.get("calib_soc_last"),
         calib_energy_last=data.get("calib_energy_last"),
         measured_ac_power_kw=data.get("measured_ac_power_kw"),
+        manual_soc=data.get("manual_soc"),
+        manual_soc_at=_parse_dt(data.get("manual_soc_at")),
+        prev_manual_soc_at=_parse_dt(data.get("prev_manual_soc_at")),
     )

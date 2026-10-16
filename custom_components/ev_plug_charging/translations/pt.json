@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "De onde vem o estado de carga?",
-        "description": "Escolhe a fonte de telemetria para o nível da bateria do teu veículo. Mais fontes estão a caminho — hoje só o PSA Car Controller é suportado.",
+        "description": "Escolhe a fonte de telemetria para o nível da bateria do teu veículo, ou \"Sem telemetria\" para indicares tu o estado de carga quando um carregamento deve começar.",
         "data": {
           "source_type": "Fonte de telemetria"
         }
@@ -43,7 +43,7 @@
       "invalid_response": "O PSACC devolveu uma resposta inesperada."
     },
     "abort": {
-      "already_configured": "Esta fonte PSACC e VIN já estão configurados.",
+      "already_configured": "Esta fonte e veículo (ou, sem telemetria, esta tomada) já estão configurados.",
       "unsupported_source": "Essa fonte de telemetria ainda não está implementada."
     }
   },
@@ -80,7 +80,7 @@
     },
     "ev_plug_charging_charge_not_started": {
       "title": "Carregamento EV não iniciado",
-      "description": "A janela de carregamento abriu mas o estado de carga do carro não pôde ser confiado, pelo que o carregamento não foi iniciado."
+      "description": "A janela de carregamento abriu mas o estado de carga do carro não pôde ser confiado, pelo que o carregamento não foi iniciado. Define 'Current SoC' (ou responde à notificação) para o iniciar."
     },
     "ev_plug_charging_restart_reconciled_off": {
       "title": "Carregamento EV parado após reinício",

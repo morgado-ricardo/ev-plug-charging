@@ -152,6 +152,10 @@ views:
           - type: divider
           - entity: number.ev_target_soc
             name: Target SoC
+          # Set this when the car's own reading can't be trusted (source
+          # unreachable, or no telemetry at all) to start a Smart charge.
+          - entity: number.ev_current_soc
+            name: Current SoC (as read off the car)
           - entity: time.ev_window_start
             name: Window start
           - entity: time.ev_window_end
