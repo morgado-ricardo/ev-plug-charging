@@ -48,7 +48,9 @@ existing code picks. It is not arbitrary.
 | `custom_components/ev_plug_charging/{notify,repairs,diagnostics,services}.py` | Event dispatch, Repairs, the diagnostics download, the services. | Yes |
 | `custom_components/ev_plug_charging/logbook.py` | Describes `EVENT_PLUG_COMMANDED` for Home Assistant's logbook -- an integration platform, discovered via `manifest.json`'s `after_dependencies`, not an entity platform. | Yes |
 | `custom_components/ev_plug_charging/__init__.py` | `async_setup_entry`, `async_migrate_entry`, platform wiring. | Deferred |
-| `tests/test_scenarios.py` | R1–R16: the regression acceptance gate. | None |
+| `tests/test_scenarios.py` | R1–R17: the regression acceptance gate. | None |
+| `tests/test_window_invariant.py` | The in-window "plug is on unless a named reason holds" rule, over an exhaustive grid. | None |
+| `tests/test_requirements.py` | Index from every core requirement to the test that pins it, plus the tests for ones that had none. | None |
 | `tests/test_*.py` (most others) | Unit tests for the pure core. | None |
 | `tests/test_integration_setup.py` | Config flow, coordinator, entity platforms against real Home Assistant. | Yes |
 | `tests/test_dashboard_examples.py` | Parses `dashboard*.yaml` and the platform modules; fails if a dashboard entity ID doesn't match an entity this integration actually creates. | None |
@@ -115,7 +117,23 @@ HA/`aiohttp` types but defer those imports into function bodies (with
   `accept_session()`'s gates, it contributes one bounded sample toward the
   working efficiency (`rate_model.record_efficiency_sample`) — but it still
   never feeds a live actuation decision directly.
-- **`tests/test_scenarios.py` (R1–R16) is the acceptance gate** for any
+- **Inside the window the plug is on, unless a named reason holds:** the
+  master switch is off, the plug is overheating, a person switched it off
+  during this window, or (Smart) the battery is at target, a charge
+  already completed in THIS window occurrence, or there is no usable
+  reading. A plug left off for any other reason means no charge is
+  possible at all, and nothing tells the user. This has happened: a
+  completion at the 08:00 window close was counted against the window
+  opening at 22:00 the same day, and Smart sat the whole night with the
+  plug off (R17). `tests/test_window_invariant.py` checks the rule over
+  an exhaustive grid; a new in-window "off" reason is a design
+  conversation, not a diff to that test's list.
+- **The user can always see why.** `Decision.status`
+  (`logic.charging_status()`, shown as `sensor.*_charging_status`) puts
+  the reason and what the plug is physically doing into words. A new
+  `reason` needs a status that says something specific;
+  `tests/test_charging_status.py` fails if one falls through to `idle`.
+- **`tests/test_scenarios.py` (R1–R17) is the acceptance gate** for any
   change to `logic.py`, `session.py` or `rate_model.py`. Every scenario in
   it is a real failure that already happened once. A scenario is never
   edited to make a change pass; if one is genuinely wrong, that's a

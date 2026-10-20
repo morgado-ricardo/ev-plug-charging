@@ -200,7 +200,10 @@ in config:
 | `switch.*_daily_wakeup` | Off by default. A scheduled refresh outside any session, so the first projection of the night isn't working from a days-old reading. Only created if the source can be asked to refresh. |
 | `time.*_daily_wakeup_time` | When that fires — default 06:00. Skipped automatically if a session is already running, the reading is already fresh, or the source is unreachable. |
 
-Read-only sensors: `*_battery_soc` (the reading in use — attribute
+Read-only sensors: `*_charging_status` (**what the plug is doing and why,
+in words** — e.g. *"Plug on, but no power drawn — is the car connected?"*,
+*"Plug too hot — charging cut for safety"*, *"Already charged in this
+window"*; attribute `decision_reason` carries the raw code), `*_battery_soc` (the reading in use — attribute
 `soc_origin` says `telemetry` or `manual`), `*_projected_soc`
 (**the one that gates the stop**), `*_charge_needed`,
 `*_estimated_charge_time`, `*_soc_silence`, `*_minutes_per_percent` (the
@@ -514,13 +517,17 @@ through an automation, is attributed to whatever did that, same as always.
 There are no automations here, so there are no traces to step through. One
 `reduce()` call per tick decides everything, and it says why.
 
-**Start with the reason.** Developer Tools → States →
-`sensor.*_projected_soc`, attribute `decision_reason`:
+**Start with `sensor.*_charging_status`.** Its state says, in words, what
+the plug is doing and why — it combines the decision below with what is
+physically happening (plug on but the car drawing nothing reads
+differently from charging). For the exact branch, Developer Tools →
+States → `sensor.*_charging_status` (or `sensor.*_projected_soc`),
+attribute `decision_reason`:
 
 | `decision_reason` | Means |
 |---|---|
 | `below_target` | It **is** charging — the plug should be on |
-| `in_window_no_action` | In the window, but something is suppressing a start |
+| `in_window_no_action` | In the window, plug left off on purpose: you switched it off during this window, a charge already completed in this window, or the battery is already at target. `*_charging_status` says which |
 | `outside_window_not_ours` | Outside the window. Check the window entities, and check the clock |
 | `below_target_unreachable` | It **is** charging, from the last reading of an unreachable source, and has [asked](#telling-it-the-state-of-charge-yourself) whether that reading still holds |
 | `soc_untrustworthy` | No reading, or one older than the last completed charge. Won't *start* until you [give it one](#telling-it-the-state-of-charge-yourself). A charge already running (e.g. you switched the plug on by hand) is still projected and stopped at target |
@@ -595,7 +602,7 @@ The decision core (`logic.py`, `session.py`, `rate_model.py`, `source.py`,
 plain `pytest`, with Home Assistant not installed. That's a tested property,
 not a convention.
 
-`tests/test_scenarios.py` holds the regression scenarios (R1–R16), each
+`tests/test_scenarios.py` holds the regression scenarios (R1–R17), each
 one a real failure that happened once. It is the acceptance gate for any
 change to the decision logic.
 

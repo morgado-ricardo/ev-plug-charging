@@ -1,4 +1,4 @@
-"""R1-R14: fourteen regression scenarios, each one a real observed night
+"""R1-R17: the regression scenarios, each one a real observed night
 where something went wrong. This suite is the acceptance gate for any
 change to logic.py, session.py or rate_model.py -- a change is not done
 until every one of these passes, and a scenario is never edited to make a
@@ -883,3 +883,122 @@ def test_r16_no_reading_at_all_is_never_read_as_at_target():
         assert decision.projected_soc is None
         assert not any(e.name.endswith("charge_complete") for e in decision.events)
         now += timedelta(minutes=5)
+
+
+# --------------------------------------------------------------------------- #
+# R17: a window-close completion swallowed the NEXT evening's window
+# (2026-10-19 and 2026-10-20). Window 22:00-08:00, Smart, 69% from a
+# reachable source, target 80%. The morning's charge was closed out by the
+# 08:00:00 window-close edge, which stamped charge_completed_at = 08:00:00.2.
+# The "already completed this window" guard compared window_instance_id()s,
+# and window_instance_id() files any instant at or after window_end under
+# TODAY's date -- the window that opens that evening. So at 22:00 the new
+# window looked already done, Smart sat on `in_window_no_action` with the
+# plug off all night, and only flipping the mode to Timed and back (Timed
+# never consulted the guard) got it charging.
+# --------------------------------------------------------------------------- #
+
+R17_START, R17_END = time(22, 0), time(8, 0)
+R17_EVENING = DAY + timedelta(days=1)
+
+
+def _r17_evening_tick(now, **overrides):
+    kwargs = dict(
+        now=now,
+        window_start=R17_START,
+        window_end=R17_END,
+        soc=69.0,
+        soc_changed_at=dt(18, 29, day=R17_EVENING),
+        source_reachable=True,
+        target_soc=80.0,
+        plug_switch_on=False,
+        car_charging=False,
+        plug_power_w=0.0,
+        mode=ChargeMode.SMART,
+        rate=RATE,
+    )
+    kwargs.update(overrides)
+    return base_inputs().set(**kwargs).build()
+
+
+def _r17_state_completed_at(completed_at):
+    return SessionState(
+        ha_started_at=dt(12, 0),
+        complete_notified=True,
+        charge_completed_at=completed_at,
+        charge_started_at=dt(5, 32, day=R17_EVENING),
+        prev_plug_switch_on=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        dt(22, 0, day=R17_EVENING),
+        dt(22, 57, day=R17_EVENING),
+        dt(2, 0, day=R17_EVENING + timedelta(days=1)),
+    ],
+)
+def test_r17_close_edge_completion_does_not_block_the_next_window(now):
+    """The exact diagnostics state: completed at the 08:00 close edge, plug
+    off, 69% < 80% -- the evening window must switch the plug on."""
+    state = _r17_state_completed_at(dt(8, 0, 0, day=R17_EVENING) + timedelta(milliseconds=205))
+    _, decision = reduce(state, _r17_evening_tick(now))
+    assert decision.plug == PlugAction.ON
+    assert decision.reason == "below_target"
+
+
+@pytest.mark.parametrize("hour", [8, 9, 15, 21])
+def test_r17_completion_between_windows_does_not_block_the_next_window(hour):
+    """Same shape for any completion between window end and the next start
+    -- a late car-confirmed report, a power drop from a daytime manual
+    charge -- none of them happened in tonight's window."""
+    state = _r17_state_completed_at(dt(hour, 30, day=R17_EVENING))
+    _, decision = reduce(state, _r17_evening_tick(dt(22, 5, day=R17_EVENING)))
+    assert decision.plug == PlugAction.ON
+
+
+def test_r17_target_reached_inside_this_window_still_holds_the_plug_off():
+    """What the guard exists for is unchanged: stopped at a projected 80%
+    at 03:00 tonight, the reading is still the stale 69% -- the plug must
+    not flap back on before the window closes."""
+    night = R17_EVENING + timedelta(days=1)
+    state = _r17_state_completed_at(dt(3, 0, day=night))
+    for now in (dt(3, 2, day=night), dt(5, 0, day=night), dt(7, 59, day=night)):
+        _, decision = reduce(state, _r17_evening_tick(now))
+        assert decision.plug != PlugAction.ON
+        assert decision.reason == "in_window_no_action"
+
+
+def test_r17_full_replay_close_edge_then_evening():
+    """Driven tick by tick across the real sequence: a charge running at
+    the 08:00 close edge, the day outside the window, then the evening."""
+    state = SessionState(ha_started_at=dt(12, 0), charge_started_at=dt(5, 32, day=R17_EVENING))
+    morning = dt(7, 58, day=R17_EVENING)
+    state, _ = reduce(
+        state,
+        _r17_evening_tick(
+            morning, soc_changed_at=dt(7, 0, day=R17_EVENING), plug_switch_on=True,
+            plug_power_w=1800.0, car_charging=True,
+        ),
+    )
+    close = dt(8, 0, day=R17_EVENING) + timedelta(milliseconds=205)
+    state, decision = reduce(
+        state,
+        _r17_evening_tick(
+            close, window_close_edge=True, soc_changed_at=dt(7, 0, day=R17_EVENING),
+            plug_switch_on=True, plug_power_w=1800.0, car_charging=True,
+        ),
+    )
+    assert decision.plug == PlugAction.OFF
+    assert state.complete_notified is True
+
+    now = dt(8, 2, day=R17_EVENING)
+    while now < dt(22, 0, day=R17_EVENING):
+        state, decision = reduce(state, _r17_evening_tick(now))
+        assert decision.plug != PlugAction.ON
+        now += timedelta(minutes=30)
+
+    state, decision = reduce(state, _r17_evening_tick(dt(22, 0, day=R17_EVENING), window_open_edge=True))
+    assert decision.plug == PlugAction.ON
+    assert decision.reason == "below_target"
