@@ -36,6 +36,40 @@ class ChargeSource(str, Enum):
     NONE = "none"
 
 
+class ChargingStatus(str, Enum):
+    """What the plug is doing right now and why, in terms a person reads
+    off a dashboard (sensor.*_charging_status). Derived by
+    logic.charging_status() from the decision reason PLUS what is
+    physically observed -- "the logic wants it on" and "current is
+    flowing" are different facts, and the gap between them (plug on, car
+    not drawing) is exactly what a person needs to see.
+
+    Display only: nothing decides from it. Every value needs a state
+    string in strings.json and both translations (tested)."""
+
+    CHARGING = "charging"
+    CHARGING_TIMED = "charging_timed"
+    CHARGING_UNCONFIRMED_SOC = "charging_unconfirmed_soc"
+    EMERGENCY_CHARGING = "emergency_charging"
+    SWITCHING_ON = "switching_on"
+    PLUG_ON_NO_POWER = "plug_on_no_power"
+    PLUG_ON_CAR_NOT_DRAWING = "plug_on_car_not_drawing"
+    CAR_FINISHED = "car_finished"
+    TARGET_REACHED = "target_reached"
+    CHARGED_THIS_WINDOW = "charged_this_window"
+    AT_TARGET = "at_target"
+    OVERHEAT = "overheat"
+    MANUAL_OFF = "manual_off"
+    WAITING_FOR_SOC = "waiting_for_soc"
+    DISABLED = "disabled"
+    WAITING_FOR_WINDOW = "waiting_for_window"
+    WINDOW_CLOSED = "window_closed"
+    OUTSIDE_WINDOW_MANUAL = "outside_window_manual"
+    RESTART_SAFETY_OFF = "restart_safety_off"
+    BYPASS = "bypass"
+    IDLE = "idle"
+
+
 class Owner(str, Enum):
     """Who turned the plug on. UNKNOWN after a restart, which is why a
     restart with the plug already on has to be reconciled rather than
@@ -304,3 +338,5 @@ class Decision:
     # None with no reading at all. Display only.
     soc: Optional[float] = None
     soc_origin: Optional[str] = None
+    # Human-readable "what is happening" -- see ChargingStatus.
+    status: ChargingStatus = ChargingStatus.IDLE

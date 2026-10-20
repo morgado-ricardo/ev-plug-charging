@@ -1435,3 +1435,27 @@ async def test_soc_confirm_requested_push_carries_the_question(hass):
     assert payload["message"].startswith("Charging from the last reading, 50%")
     assert payload["data"]["tag"] == SOC_PROMPT_TAG
     assert [a["title"] for a in payload["data"]["actions"]] == ["Yes, 50%", "Enter SoC"]
+
+
+async def test_charging_status_sensor_is_an_enum_with_every_status(hass, aioclient_mock):
+    """sensor.*_charging_status: an ENUM sensor whose options are exactly
+    the ChargingStatus codes (each translated in strings.json, see
+    test_charging_status.py), carrying the raw decision reason for
+    comparison against a diagnostics dump."""
+    from unittest.mock import patch
+
+    from ev_plug_charging.const import DOMAIN
+    from ev_plug_charging.models import ChargingStatus
+
+    noon = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    with patch("homeassistant.util.dt.now", return_value=noon):
+        entry, _ = await _setup_entry(hass, aioclient_mock)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    entity_id = _entity_id(hass, entry, "sensor", "charging_status")
+    state = hass.states.get(entity_id)
+    assert state.attributes["device_class"] == "enum"
+    assert state.attributes["options"] == [s.value for s in ChargingStatus]
+    assert state.state == coordinator.last_decision.status.value
+    assert state.state == ChargingStatus.WAITING_FOR_WINDOW.value
+    assert state.attributes["decision_reason"] == coordinator.last_decision.reason

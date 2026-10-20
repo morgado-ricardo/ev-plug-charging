@@ -134,6 +134,7 @@ async def async_get_config_entry_diagnostics(
         "last_decision": {
             "plug": last_decision.plug.value if last_decision else None,
             "reason": last_decision.reason if last_decision else None,
+            "status": last_decision.status.value if last_decision else None,
             "projected_soc": last_decision.projected_soc if last_decision else None,
             "silence_minutes": last_decision.silence_minutes if last_decision else None,
             "charge_source": last_decision.charge_source.value if last_decision else None,

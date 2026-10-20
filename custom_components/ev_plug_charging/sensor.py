@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .coordinator import EvPlugChargingCoordinator
 from .entity import EvPlugChargingEntity
+from .models import ChargingStatus
 
 
 async def async_setup_entry(
@@ -23,6 +24,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: EvPlugChargingCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list = [
+        ChargingStatusSensor(coordinator, entry),
         SocSensor(coordinator, entry),
         ProjectedSocSensor(coordinator, entry),
         ChargeNeededSensor(coordinator, entry),
@@ -78,6 +80,40 @@ class _BaseSensor(EvPlugChargingEntity, SensorEntity):
             return d.soc
         t = self._telemetry
         return t.soc if t else None
+
+
+class ChargingStatusSensor(_BaseSensor):
+    """What the plug is doing and why, in words (logic.charging_status()).
+    An ENUM sensor with a translation_key so the state renders as a
+    sentence in the user's language while automations still match on the
+    stable code. The raw decision reason rides along as an attribute for
+    anyone comparing against a diagnostics dump."""
+
+    _attr_icon = "mdi:ev-station"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [s.value for s in ChargingStatus]
+    _attr_translation_key = "charging_status"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "charging_status", "Charging status")
+
+    @property
+    def native_value(self):
+        d = self._decision
+        return d.status.value if d else None
+
+    @property
+    def extra_state_attributes(self):
+        d = self._decision
+        if not d:
+            return {}
+        return {
+            "decision_reason": d.reason,
+            "plug_action": d.plug.value,
+            "plug_delivering": d.plug_delivering,
+            "projected_soc": d.projected_soc,
+            "charge_source": d.charge_source.value,
+        }
 
 
 class SocSensor(_BaseSensor):

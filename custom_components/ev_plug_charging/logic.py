@@ -14,7 +14,7 @@ callback. Edge triggers lose their state across a restart; timestamps do
 not, and this module has to keep projecting correctly through both a
 restart and hours of telemetry silence.
 
-tests/test_scenarios.py (R1-R16) is the acceptance gate for this module.
+tests/test_scenarios.py (R1-R17) is the acceptance gate for this module.
 Each scenario is a real failure that happened once.
 """
 from __future__ import annotations
@@ -51,6 +51,7 @@ from .session import advance_session
 from .models import (
     ChargeMode,
     ChargeSource,
+    ChargingStatus,
     Decision,
     Event,
     Inputs,
@@ -70,6 +71,7 @@ __all__ = [
     "silence_minutes",
     "projected_soc",
     "classify_source",
+    "charging_status",
     "reduce",
 ]
 
@@ -228,6 +230,77 @@ def classify_source(car_charging: bool, plug_delivering: bool) -> ChargeSource:
     if plug_delivering:
         return ChargeSource.PLUG_IDLE
     return ChargeSource.NONE
+
+
+def charging_status(
+    *,
+    reason: str,
+    plug: PlugAction,
+    plug_switch_on: bool,
+    plug_delivering: bool,
+    plugged: Optional[bool],
+    charge_source: ChargeSource,
+    complete_notified: bool,
+    session_saw_power: bool,
+    manual_off_active: bool,
+    completed_this_window: bool,
+    soc: Optional[float],
+    target_soc: float,
+) -> ChargingStatus:
+    """What a person should read off the dashboard: the decision's reason
+    refined by what is physically happening at the plug.
+
+    `reason` alone says what the logic wanted; it cannot say "the plug is
+    on but the car is drawing nothing" or "off because you switched it
+    off", and those are exactly the states that leave a car uncharged in
+    the morning. Display only -- reduce() never decides from it.
+    """
+    if reason == "overheat":
+        return ChargingStatus.OVERHEAT
+    if reason == "disabled":
+        return ChargingStatus.DISABLED
+    if reason == "emergency_low_soc":
+        return ChargingStatus.EMERGENCY_CHARGING
+
+    plug_on = plug == PlugAction.ON or (plug_switch_on and plug != PlugAction.OFF)
+    if plug_on:
+        if not plug_switch_on:
+            return ChargingStatus.SWITCHING_ON
+        if plug_delivering:
+            if reason == "timed_window":
+                return ChargingStatus.CHARGING_TIMED
+            if reason in ("below_target_unreachable", "soc_untrustworthy"):
+                return ChargingStatus.CHARGING_UNCONFIRMED_SOC
+            if reason == "outside_window_not_ours":
+                return ChargingStatus.OUTSIDE_WINDOW_MANUAL
+            return ChargingStatus.CHARGING
+        if complete_notified and session_saw_power:
+            return ChargingStatus.CAR_FINISHED
+        if charge_source == ChargeSource.BYPASS:
+            return ChargingStatus.BYPASS
+        if plugged is True:
+            return ChargingStatus.PLUG_ON_CAR_NOT_DRAWING
+        return ChargingStatus.PLUG_ON_NO_POWER
+
+    if charge_source == ChargeSource.BYPASS:
+        return ChargingStatus.BYPASS
+    if reason in ("target_reached", "target_reached_unreachable"):
+        return ChargingStatus.TARGET_REACHED
+    if reason in ("window_close", "outside_window_we_own_it"):
+        return ChargingStatus.WINDOW_CLOSED
+    if reason == "restart_reconcile_unknown_owner":
+        return ChargingStatus.RESTART_SAFETY_OFF
+    if reason in ("soc_untrustworthy", "below_target_unreachable"):
+        return ChargingStatus.WAITING_FOR_SOC
+    if reason == "outside_window_not_ours":
+        return ChargingStatus.WAITING_FOR_WINDOW
+    if manual_off_active:
+        return ChargingStatus.MANUAL_OFF
+    if completed_this_window:
+        return ChargingStatus.CHARGED_THIS_WINDOW
+    if soc is not None and soc >= target_soc:
+        return ChargingStatus.AT_TARGET
+    return ChargingStatus.IDLE
 
 
 def _daily_wakeup_due(
@@ -668,6 +741,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             reason="overheat",
             soc=inp.soc,
             soc_origin=soc_origin,
+            status=ChargingStatus.OVERHEAT,
         )
     if state.overheat_latched and (
         inp.plug_temp_c is None or inp.plug_temp_c < inp.temp_limit_c - OVERHEAT_HYSTERESIS_C
@@ -692,6 +766,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             reason="disabled",
             soc=inp.soc,
             soc_origin=soc_origin,
+            status=ChargingStatus.DISABLED,
         )
 
     # ---- 3. emergency low SoC: Smart only, ignores the window ----
@@ -719,6 +794,7 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
             reason="emergency_low_soc",
             soc=inp.soc,
             soc_origin=soc_origin,
+            status=ChargingStatus.EMERGENCY_CHARGING,
         )
 
     window_open = in_window(
@@ -742,11 +818,22 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
     # latch, so it survives a restart and expires on its own when the next
     # window occurrence opens. A genuinely new window, or a new session,
     # charges normally.
+    #
+    # "This window" means completed at or after the moment the CURRENT
+    # occurrence opened -- not "maps to the same window_instance_id()".
+    # That function files every instant at or after window_end under the
+    # window opening later the same day, so the 08:00 close-edge
+    # completion of last night's charge read as "tonight's window already
+    # done" and Smart left the plug off all evening (R17).
     completed_this_window = (
         state.complete_notified
         and state.charge_completed_at is not None
-        and window_instance_id(state.charge_completed_at, inp.window_start, inp.window_end)
-        == window_instance_id(inp.now, inp.window_start, inp.window_end)
+        and state.charge_completed_at
+        >= window_open_at(
+            window_instance_id(inp.now, inp.window_start, inp.window_end),
+            inp.window_start,
+            inp.now.tzinfo,
+        )
     )
 
     # ---- 4. in window ----
@@ -950,6 +1037,20 @@ def reduce(prev: SessionState, inp: Inputs) -> tuple[SessionState, Decision]:
         reason=reason,
         soc=inp.soc,
         soc_origin=soc_origin,
+        status=charging_status(
+            reason=reason,
+            plug=plug,
+            plug_switch_on=inp.plug_switch_on,
+            plug_delivering=plug_delivering,
+            plugged=inp.plugged,
+            charge_source=charge_source,
+            complete_notified=state.complete_notified,
+            session_saw_power=state.session_saw_power,
+            manual_off_active=manual_off_active,
+            completed_this_window=completed_this_window,
+            soc=inp.soc,
+            target_soc=inp.target_soc,
+        ),
     )
 
 

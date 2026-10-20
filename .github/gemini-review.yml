@@ -64,7 +64,7 @@ instructions: |
     arm, not a `.get(key, default)` papering over existing entries.
 
   Tests:
-  - tests/test_scenarios.py (R1-R14) is the acceptance gate. Each scenario
+  - tests/test_scenarios.py (R1-R17) is the acceptance gate. Each scenario
     is a real failure that happened once on a real car. Flag ANY edit to a
     scenario made in order to let a change pass; that is never acceptable,
     and a scenario believed wrong is a conversation, not a diff.
@@ -84,7 +84,7 @@ instructions: |
   - This repository is public and self-contained. Flag any reference to a
     file, document or section a reader here cannot open — a path into
     another repository, a "plan section N", a bare design-decision ID like
-    D4 or FR-S2. R1-R14 are fine: they resolve to real tests here.
+    D4 or FR-S2. R1-R17 are fine: they resolve to real tests here.
 
   Prefer concise, actionable comments. Skip stylistic nits that `ruff`
   already enforces — it runs on every PR.

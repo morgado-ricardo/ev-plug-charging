@@ -98,5 +98,35 @@
       "title": "Corrente de carregamento EV pode estar mal configurada",
       "description": "A corrente de carregamento configurada é {configured_a}A (~{configured_kw}kW), mas a tomada está a medir cerca de {measured_a}A (~{measured_kw}kW). Verifica os amperes configurados nas opções da integração contra o que o EVSE/cabo está realmente definido."
     }
+  },
+  "entity": {
+    "sensor": {
+      "charging_status": {
+        "name": "Estado do carregamento",
+        "state": {
+          "charging": "A carregar — para quando atingir o objetivo",
+          "charging_timed": "A carregar até ao fim da janela (Temporizado)",
+          "charging_unconfirmed_soc": "A carregar a partir do último nível conhecido (dados do carro indisponíveis)",
+          "emergency_charging": "Bateria abaixo do mínimo — a carregar já, fora da janela",
+          "switching_on": "A ligar a tomada",
+          "plug_on_no_power": "Tomada ligada, mas sem consumo — o carro está ligado?",
+          "plug_on_car_not_drawing": "Carro ligado e tomada ligada, mas o carro não está a consumir",
+          "car_finished": "O carro deixou de consumir — carga concluída",
+          "target_reached": "Objetivo atingido — tomada desligada",
+          "charged_this_window": "Já carregou nesta janela — tomada desligada até à próxima",
+          "at_target": "Bateria já no objetivo ou acima — sem carregar",
+          "overheat": "Tomada demasiado quente — carga cortada por segurança",
+          "manual_off": "Tomada desligada à mão — fica desligada até ao fim desta janela",
+          "waiting_for_soc": "À espera do nível da bateria — sem ele a carga não pode começar",
+          "disabled": "Automação desativada — só observa, não controla a tomada",
+          "waiting_for_window": "À espera da janela de carregamento",
+          "window_closed": "Janela de carregamento terminou — tomada desligada",
+          "outside_window_manual": "A carregar fora da janela (tomada ligada à mão)",
+          "restart_safety_off": "Desligada após reinício — a tomada estava ligada fora da janela",
+          "bypass": "O carro está a carregar por outra fonte, não por esta tomada",
+          "idle": "Inativo — nada a fazer"
+        }
+      }
+    }
   }
 }

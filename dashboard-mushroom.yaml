@@ -108,17 +108,10 @@ views:
           %}Charging through the plug {% elif s == 'bypass' %}Charging direct
           from the wall {% elif s == 'plug_idle' %}Plug on, car idle {% else
           %}Not charging{% endif %}
+        # What the plug is doing and why, in words -- the translated
+        # state of sensor.ev_charging_status.
         secondary: >-
-          {% set r = state_attr('sensor.ev_projected_soc', 'decision_reason') %}
-          {% if r == 'target_reached' %}Target reached — stopped {% elif r ==
-          'below_target' %}Below target, inside the window {% elif r ==
-          'timed_window' %}Timed charge until the window closes {% elif r ==
-          'window_close' %}Window closed — stopped {% elif r == 'overheat'
-          %}Plug overheated — cut and disabled {% elif r == 'emergency_low_soc'
-          %}Emergency charge, outside the window {% elif r ==
-          'soc_untrustworthy' %}No trustworthy reading — not starting {% elif r
-          == 'disabled' %}Integration disabled {% elif r is none %}Waiting for
-          the first evaluation {% else %}{{ r | replace('_', ' ') }}{% endif %}
+          {{ state_translated('sensor.ev_charging_status') }}
         icon: >-
           {% set s = states('sensor.ev_charge_source') %} {% if s == 'plug'
           %}mdi:power-plug {% elif s == 'bypass' %}mdi:transmission-tower-export

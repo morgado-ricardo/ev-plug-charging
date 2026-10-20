@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Load before adding or changing any test, or before claiming a change is verified. Explains the two test tiers, why a green plain pytest run does not prove the HA-facing layer works, the R1-R14 acceptance gate, and the environment recipe for the real-HA suite.
+description: Load before adding or changing any test, or before claiming a change is verified. Explains the two test tiers, why a green plain pytest run does not prove the HA-facing layer works, the R1-R17 acceptance gate, and the environment recipe for the real-HA suite.
 ---
 
 # Testing
@@ -38,12 +38,12 @@ tests passed" is not informative on its own if tier 2 was skipped — say
 "101 passed, tier 2 (N tests) ran / tier 2 skipped (dependency not
 installed)" explicitly.
 
-## R1–R14 is the acceptance gate, not an ordinary regression suite
+## R1–R17 is the acceptance gate, not an ordinary regression suite
 
-`tests/test_scenarios.py` holds fourteen scenarios, each one a real failure
+`tests/test_scenarios.py` holds the R1–R17 scenarios, each one a real failure
 that happened once on a real car.
 Any change to `logic.py`, `session.py`, or `rate_model.py` must leave every
-one of R1–R14 passing. **Never edit a scenario to make a change pass** — a
+one of R1–R17 passing. **Never edit a scenario to make a change pass** — a
 scenario failing after a change means the change regressed real behaviour;
 if a scenario is genuinely believed wrong, that is a design conversation to
 have explicitly, not a quiet edit buried in an unrelated diff.
@@ -119,6 +119,20 @@ imports with `TYPE_CHECKING` for type annotations. Any new module-scope
 `sources/__init__.py`-registry module breaks this property immediately —
 check for it explicitly in review, since it will not fail loudly until
 someone actually tries to run tier 1 without HA installed.
+
+## The invariant and the requirements index
+
+`tests/test_window_invariant.py` drives `reduce()` over an exhaustive grid
+(window shapes, clock positions, plug states, readings, prior completions,
+ownership, human overrides) and fails on any in-window state that leaves
+the plug off for a reason not on its short, named list. Where R17 pins the
+one road that left a plug off all night, this pins every road. If a change
+legitimately adds a new in-window "off" reason, that is a design
+conversation, the same as editing a scenario.
+
+`tests/test_requirements.py` is the index from every core requirement in
+`README.md`/`AGENTS.md` to the test that pins it. A new requirement gets a
+row there and a test, in the same change.
 
 ## Tests that guard documentation, not code
 

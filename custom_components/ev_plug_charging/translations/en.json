@@ -98,5 +98,35 @@
       "title": "EV charging current may be misconfigured",
       "description": "Configured charging current is {configured_a}A (~{configured_kw}kW), but the plug is measuring about {measured_a}A (~{measured_kw}kW). Check the configured amps in the integration's options against what the EVSE/granny cable is actually set to."
     }
+  },
+  "entity": {
+    "sensor": {
+      "charging_status": {
+        "name": "Charging status",
+        "state": {
+          "charging": "Charging — will stop at the target",
+          "charging_timed": "Charging until the window ends (Timed)",
+          "charging_unconfirmed_soc": "Charging from the last known battery level (car data unreachable)",
+          "emergency_charging": "Battery below minimum — charging now, outside the window",
+          "switching_on": "Turning the plug on",
+          "plug_on_no_power": "Plug on, but no power drawn — is the car connected?",
+          "plug_on_car_not_drawing": "Car connected, plug on, but the car isn't drawing power",
+          "car_finished": "Car stopped drawing power — charge finished",
+          "target_reached": "Target reached — plug turned off",
+          "charged_this_window": "Already charged in this window — plug off until the next one",
+          "at_target": "Battery already at or above target — not charging",
+          "overheat": "Plug too hot — charging cut for safety",
+          "manual_off": "Plug switched off by hand — stays off until this window ends",
+          "waiting_for_soc": "Waiting for the battery level — charging can't start without it",
+          "disabled": "Automation disabled — observing only, not controlling the plug",
+          "waiting_for_window": "Waiting for the charging window",
+          "window_closed": "Charging window ended — plug turned off",
+          "outside_window_manual": "Charging outside the window (plug turned on by hand)",
+          "restart_safety_off": "Turned off after a restart — the plug was on outside the window",
+          "bypass": "Car charging from another source, not through this plug",
+          "idle": "Idle — nothing to do"
+        }
+      }
+    }
   }
 }

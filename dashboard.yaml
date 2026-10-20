@@ -84,32 +84,15 @@ views:
               red: 20
 
       # -- Why it is doing what it is doing --------------------------
-      # decision_reason is this integration's replacement for Home
-      # Assistant's automation traces: the exact branch that produced the
-      # current plug state. Otherwise only visible in a diagnostics dump.
+      # sensor.ev_charging_status is this integration's replacement for
+      # Home Assistant's automation traces: the decision behind the
+      # current plug state, refined by what the plug is physically doing,
+      # as a sentence in your language. Its decision_reason attribute is
+      # the exact branch, for comparing against a diagnostics dump.
       - type: markdown
         content: >-
-          {% set r = state_attr('sensor.ev_projected_soc', 'decision_reason') %}
-          {% set src = states('sensor.ev_charge_source') %} {% if r ==
-          'target_reached' %}✅ **Target reached** — charging stopped. {% elif r
-          == 'below_target' %}⚡ **Charging** — below target, inside the window.
-          {% elif r == 'timed_window' %}⏱️ **Timed charge** — running until the
-          window closes, SoC ignored. {% elif r == 'window_close' %}🌅 **Window
-          closed** — charging stopped. {% elif r == 'overheat' %}🔥 **Plug
-          overheated** — charging cut and the integration disabled itself.
-          Inspect the plug before re-enabling. {% elif r == 'disabled' %}⏸️
-          **Disabled** — watching only, not controlling the plug. {% elif r ==
-          'emergency_low_soc' %}🚨 **Emergency charge** — below the critical
-          threshold, charging outside the window. {% elif r ==
-          'soc_untrustworthy' %}⚠️ **No trustworthy state of charge** — not
-          starting. Check that the source is reachable. {% elif r ==
-          'restart_reconcile_unknown_owner' %}↩️ **Stopped after a restart** —
-          the plug was on outside the window with no record of who turned it on.
-          {% elif r in ['outside_window_not_ours', 'in_window_no_action'] %}💤
-          **Idle** — nothing to do right now. {% elif r ==
-          'outside_window_we_own_it' %}🌙 **Outside the window** — charging
-          stopped. {% elif r is none %}⏳ Waiting for the first evaluation… {%
-          else %}ℹ️ {{ r }} {% endif %} {% if src == 'bypass' %}
+          **{{ state_translated('sensor.ev_charging_status') }}**
+          {% if is_state('sensor.ev_charge_source', 'bypass') %}
 
 
           Source: **direct from the wall** (not through the plug). {% endif %}
@@ -120,6 +103,8 @@ views:
         show_header_toggle: false
         state_color: true
         entities:
+          - entity: sensor.ev_charging_status
+            name: Status
           - entity: sensor.ev_charge_source
             name: Charge source
           - entity: binary_sensor.ev_charging_active
