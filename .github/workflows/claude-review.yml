@@ -1,0 +1,45 @@
+# AI code review with Claude Code (anthropics/claude-code-action), which reads
+# the code around each change rather than just the diff.
+#
+# The mechanics live in one shared place:
+#   morgado-ricardo/ci-shared → .github/workflows/claude-review.yml
+# That is where the model and the review prompt are configured, for every
+# repository at once. This file only says *when* to review — triggers have
+# to stay with the caller.
+#
+# What stays repo-local:
+#   - REVIEW.md — repo-specific review guidance (CLAUDE.md is read too).
+#   - the CLAUDE_CODE_OAUTH_TOKEN secret (from `claude setup-token`;
+#     Settings → Secrets and variables → Actions); secrets never cross
+#     repositories.
+#
+# Re-run on demand by commenting `/claude-review` on a pull request.
+name: Claude code review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    # Gate here, not only inside the shared workflow. Without this, GitHub
+    # spawns a run for every comment on every issue and only then discovers
+    # the called job is skipped. The shared workflow keeps the same condition
+    # (plus a commenter-permission check) as a safety net.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/claude-review'))
+    uses: morgado-ricardo/ci-shared/.github/workflows/claude-review.yml@main
+    # Granted here, not in the shared workflow: a called workflow can only
+    # narrow the caller's permissions, never widen them. issues: write is for
+    # the summary comment (PR comments go through the issues API).
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
